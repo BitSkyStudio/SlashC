@@ -1,0 +1,8 @@
+[package]
+name = "slashc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = {version="1.0.99", features=["backtrace"]}
+inkwell = {git="https://github.com/TheDan64/inkwell.git", features=["llvm20-1"]}
