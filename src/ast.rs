@@ -1,5 +1,5 @@
 use crate::{
-    compile::ItemPath,
+    compile::{CompiledStatement, ItemPath},
     lexer::{Comparison, Operator, Token, TokenList},
 };
 use anyhow::{Result, anyhow};
@@ -85,42 +85,48 @@ pub fn parse_block(tokens: &mut TokenList) -> Result<ASTBlock> {
     tokens.expect_token(Token::LBrace)?;
     let mut statements = Vec::new();
     loop {
-        if let Some(statement) = tokens.try_parse(|tokens| {
+        if tokens.is_expected_and_take(Token::RBrace)?.0 {
+            break;
+        } else if let Some((data_type, variable)) = tokens.try_parse(|tokens| {
             let data_type = parse_data_type(tokens)?;
             let variable = tokens.expect_identifier()?.0;
             tokens.expect_token(Token::Assign(None))?;
+            Ok((data_type, variable))
+        }) {
             let expression = parse_expression(tokens)?;
             tokens.expect_token(Token::Semicolon)?;
-            Ok(ASTStatement::InitializeAssign {
+            statements.push(ASTStatement::InitializeAssign {
                 data_type,
                 variable,
                 expression,
-            })
-        }) {
-            statements.push(statement);
-        } else if let Some(statement) = tokens.try_parse(|tokens| {
-            let left = parse_expression(tokens)?;
-            tokens.expect_token(Token::Assign(None))?;
-            let right = parse_expression(tokens)?;
-            tokens.expect_token(Token::Semicolon)?;
-            Ok(ASTStatement::Assign { left, right })
-        }) {
-            statements.push(statement);
-        } else if let Some(expression) = tokens.try_parse(|tokens| parse_expression(tokens)) {
-            if tokens.is_expected_and_take(Token::Semicolon)?.0 {
-                statements.push(ASTStatement::Expression(expression));
-            } else {
-                tokens.expect_token(Token::RBrace)?;
-                return Ok(ASTBlock {
-                    statements,
-                    return_expression: Some(expression),
-                });
-            }
+            });
         } else {
-            break;
+            let left = parse_expression(tokens)?;
+            if left.no_semicolon_required() {
+                if tokens.is_expected_and_take(Token::RBrack)?.0 {
+                    return Ok(ASTBlock {
+                        statements,
+                        return_expression: Some(left),
+                    });
+                }
+            }
+            if tokens.is_expected_and_take(Token::Assign(None))?.0 {
+                let right = parse_expression(tokens)?;
+                tokens.expect_token(Token::Semicolon)?;
+                statements.push(ASTStatement::Assign { left, right });
+            } else {
+                if tokens.is_expected_and_take(Token::Semicolon)?.0 {
+                    statements.push(ASTStatement::Expression(left));
+                } else {
+                    tokens.expect_token(Token::RBrace)?;
+                    return Ok(ASTBlock {
+                        statements,
+                        return_expression: Some(left),
+                    });
+                }
+            }
         }
     }
-    tokens.expect_token(Token::RBrace)?;
     Ok(ASTBlock {
         statements,
         return_expression: None,
@@ -228,6 +234,13 @@ pub enum ASTExpression {
     VariableAccess {
         variable: String,
     },
+}
+impl ASTExpression {
+    pub fn no_semicolon_required(&self) -> bool {
+        match self {
+            _ => false,
+        }
+    }
 }
 #[derive(Debug)]
 pub enum ASTLiteral {
