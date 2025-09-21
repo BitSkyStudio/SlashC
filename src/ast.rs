@@ -5,10 +5,10 @@ use crate::{
 use anyhow::{Result, anyhow};
 
 pub fn parse_item_path(tokens: &mut TokenList) -> Result<ItemPath> {
-    Ok(ItemPath::new().extend(tokens.expect_identifier()?.0))
+    Ok(ItemPath::single(tokens.expect_identifier()?.0))
 }
 
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ParamType {
     pub path: ItemPath,
     pub template_args: Vec<ParamType>,
@@ -28,10 +28,24 @@ pub fn parse_param_type(tokens: &mut TokenList) -> Result<ParamType> {
         },
     })
 }
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct DataType {
     pub param_type: ParamType,
     pub reference: Option<DataTypeReference>,
+}
+impl DataType {
+    pub fn make_simple(path: ItemPath) -> Self {
+        DataType {
+            param_type: ParamType {
+                path,
+                template_args: Vec::new(),
+            },
+            reference: None,
+        }
+    }
+    pub fn void() -> Self {
+        DataType::make_simple(ItemPath::single("void"))
+    }
 }
 pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
     Ok(DataType {
@@ -42,11 +56,11 @@ pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
         param_type: parse_param_type(tokens)?,
     })
 }
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct DataTypeReference {
     pub mutability: Mutability,
 }
-#[derive(Debug)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Mutability {
     Immutable,
     Mutable,
@@ -206,7 +220,7 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
                 }
                 tokens.expect_token(Token::RParen)?;
                 ASTExpression::FunctionCall {
-                    function: ItemPath::new().extend(identifier),
+                    function: ItemPath::single(identifier),
                     parameters,
                 }
             } else {

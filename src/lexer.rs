@@ -418,18 +418,18 @@ pub enum Operator {
     Comparison(Comparison),
 }
 impl Operator {
-    pub fn get_script_name(self) -> &'static str {
+    pub fn get_name(self) -> &'static str {
         match self {
-            Operator::Plus => "plus",
-            Operator::Minus => "minus",
-            Operator::Multiply => "multiply",
-            Operator::Divide => "divide",
-            Operator::Modulo => "modulo",
-            Operator::Negate => "negate",
+            Operator::Plus => "add",
+            Operator::Minus => "sub",
+            Operator::Multiply => "mul",
+            Operator::Divide => "div",
+            Operator::Modulo => "mod",
+            Operator::Negate => "neg",
             Operator::And => "and",
             Operator::Or => "or",
             Operator::Xor => "xor",
-            Operator::Comparison(_) => "comparison",
+            Operator::Comparison(_) => "cmp",
         }
     }
     pub fn precedence(self) -> u8 {

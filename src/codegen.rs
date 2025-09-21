@@ -45,11 +45,12 @@ impl<'ctx> CodeGen<'ctx> {
             .map(|variable| self.builder.build_alloca(it, "var").unwrap())
             .collect();
 
+        let mut returned = None;
         for statement in compiled_function.block.statements {
-            self.build_statement(&statement, &variables);
+            returned = self.build_statement(&statement, &variables);
         }
-
-        self.builder.build_return(None).unwrap();
+        let returned = returned.map(|v| v.into_int_value()).unwrap();
+        self.builder.build_return(Some(&returned)).unwrap();
 
         unsafe { self.execution_engine.get_function(function_name).ok() }
     }
@@ -74,7 +75,7 @@ impl<'ctx> CodeGen<'ctx> {
                     )
                     .unwrap(),
             ),
-            CompiledStatement::SaveVariable { variable, value } => {
+            CompiledStatement::StoreVariable { variable, value } => {
                 self.builder
                     .build_store(
                         variables[*variable as usize],
@@ -98,10 +99,24 @@ impl<'ctx> CodeGen<'ctx> {
                         .unwrap()
                         .into(),
                 ),
+                Operator::Minus => Some(
+                    self.builder
+                        .build_int_sub(
+                            Self::build_statement(self, &a, variables)
+                                .unwrap()
+                                .into_int_value(),
+                            Self::build_statement(self, &b, variables)
+                                .unwrap()
+                                .into_int_value(),
+                            "sub",
+                        )
+                        .unwrap()
+                        .into(),
+                ),
                 _ => unimplemented!(),
             },
-            CompiledStatement::FunctionCall { name, arguments } => {
-                let function = self.module.get_function(&name).unwrap();
+            CompiledStatement::FunctionCall { path, arguments } => {
+                let function = self.module.get_function(&path.0.join("::")).unwrap();
 
                 self.builder
                     .build_call(

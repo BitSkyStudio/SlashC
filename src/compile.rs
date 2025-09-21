@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{ASTBlock, ASTExpression, ASTLiteral, ASTMember, ASTStatement},
+    ast::{ASTBlock, ASTExpression, ASTLiteral, ASTMember, ASTStatement, DataType},
     lexer::Operator,
 };
 
@@ -10,6 +10,9 @@ pub struct ItemPath(pub Vec<String>);
 impl ItemPath {
     pub fn new() -> Self {
         ItemPath(Vec::new())
+    }
+    pub fn single(value: impl ToString) -> Self {
+        ItemPath::new().extend(value.to_string())
     }
     pub fn extend(&self, value: String) -> Self {
         let mut new_path = self.clone();
@@ -50,7 +53,7 @@ impl Compiler {
     }
 }
 pub struct FunctionCompileContext {
-    variables: Vec<()>,
+    variables: Vec<DataType>,
     variable_stack: Vec<HashMap<String, u32>>,
 }
 impl FunctionCompileContext {
@@ -66,7 +69,7 @@ impl FunctionCompileContext {
     pub fn stack_pop(&mut self) {
         self.variable_stack.pop();
     }
-    pub fn set_variable(&mut self, name: &str, variable: ()) -> u32 {
+    pub fn set_variable(&mut self, name: &str, variable: DataType) -> u32 {
         let id = self.variables.len() as u32;
         self.variables.push(variable);
         self.variable_stack
@@ -83,13 +86,13 @@ impl FunctionCompileContext {
         }
         None
     }
-    pub fn get_variable(&self, id: u32) -> &() {
+    pub fn get_variable_type(&self, id: u32) -> &DataType {
         &self.variables[id as usize]
     }
 }
 #[derive(Debug)]
 pub struct CompiledFunction {
-    pub variables: Vec<()>,
+    pub variables: Vec<DataType>,
     pub block: CompiledBlock,
 }
 #[derive(Debug)]
@@ -106,11 +109,11 @@ impl CompiledBlock {
         for statement in &block.statements {
             match statement {
                 ASTStatement::Expression(expression) => {
-                    statements.push(Self::compile_expression(expression, context, compiler))
+                    statements.push(Self::compile_expression(expression, context, compiler));
                 }
                 ASTStatement::Assign { left, right } => match left {
                     ASTExpression::VariableAccess { variable } => {
-                        statements.push(CompiledStatement::SaveVariable {
+                        statements.push(CompiledStatement::StoreVariable {
                             variable: context.get_variable_id(&variable).unwrap(),
                             value: Box::new(Self::compile_expression(right, context, compiler)),
                         });
@@ -122,13 +125,17 @@ impl CompiledBlock {
                     variable,
                     expression,
                 } => {
-                    let variable = context.set_variable(&variable, ());
-                    statements.push(CompiledStatement::SaveVariable {
+                    let expression = Self::compile_expression(expression, context, compiler);
+                    let variable = context.set_variable(&variable, data_type.clone());
+                    statements.push(CompiledStatement::StoreVariable {
                         variable,
-                        value: Box::new(Self::compile_expression(expression, context, compiler)),
+                        value: Box::new(expression),
                     });
                 }
             }
+        }
+        if let Some(expression) = &block.return_expression {
+            statements.push(Self::compile_expression(expression, context, compiler));
         }
         CompiledBlock { statements }
     }
@@ -147,16 +154,24 @@ impl CompiledBlock {
                 left,
                 right,
                 operator,
-            } => CompiledStatement::IntegerOp {
-                a: Box::new(Self::compile_expression(left, context, compiler)),
-                b: Box::new(Self::compile_expression(right, context, compiler)),
-                op: *operator,
-            },
+            } => {
+                let left = Self::compile_expression(left, context, compiler);
+                let right = Self::compile_expression(right, context, compiler);
+                Self::make_function_call(
+                    left.get_return_type(context, compiler)
+                        .param_type
+                        .path
+                        .extend(format!("operator_{}", operator.get_name())),
+                    vec![left, right],
+                    context,
+                    compiler,
+                )
+            }
             ASTExpression::FunctionCall {
                 function,
                 parameters,
             } => CompiledStatement::FunctionCall {
-                name: function.0.join("::"),
+                path: function.clone(),
                 arguments: parameters
                     .iter()
                     .map(|expression| Self::compile_expression(expression, context, compiler))
@@ -165,6 +180,34 @@ impl CompiledBlock {
             ASTExpression::VariableAccess { variable } => CompiledStatement::LoadVariable {
                 variable: context.get_variable_id(&variable).unwrap(),
             },
+        }
+    }
+    pub fn make_function_call(
+        function: ItemPath,
+        mut parameters: Vec<CompiledStatement>,
+        context: &FunctionCompileContext,
+        compiler: &Compiler,
+    ) -> CompiledStatement {
+        match function.0.join("::").as_str() {
+            "i64::operator_add" => {
+                let right = parameters.pop().unwrap();
+                let left = parameters.pop().unwrap();
+                CompiledStatement::IntegerOp {
+                    a: Box::new(left),
+                    b: Box::new(right),
+                    op: Operator::Plus,
+                }
+            }
+            "i64::operator_sub" => {
+                let right = parameters.pop().unwrap();
+                let left = parameters.pop().unwrap();
+                CompiledStatement::IntegerOp {
+                    a: Box::new(left),
+                    b: Box::new(right),
+                    op: Operator::Minus,
+                }
+            }
+            _ => unimplemented!(),
         }
     }
 }
@@ -176,7 +219,7 @@ pub enum CompiledStatement {
     LoadVariable {
         variable: u32,
     },
-    SaveVariable {
+    StoreVariable {
         variable: u32,
         value: Box<CompiledStatement>,
     },
@@ -186,7 +229,35 @@ pub enum CompiledStatement {
         op: Operator,
     },
     FunctionCall {
-        name: String,
+        path: ItemPath,
         arguments: Vec<CompiledStatement>,
     },
+}
+impl CompiledStatement {
+    pub fn get_return_type(
+        &self,
+        context: &FunctionCompileContext,
+        compiler: &Compiler,
+    ) -> DataType {
+        match self {
+            CompiledStatement::IntegerLiteral { value } => {
+                DataType::make_simple(ItemPath::single("i64"))
+            }
+            CompiledStatement::LoadVariable { variable } => {
+                context.get_variable_type(*variable).clone()
+            }
+            CompiledStatement::StoreVariable { variable, value } => DataType::void(),
+            CompiledStatement::IntegerOp { a, b, op } => match op {
+                Operator::Plus
+                | Operator::Minus
+                | Operator::Multiply
+                | Operator::Divide
+                | Operator::Modulo
+                | Operator::Negate => DataType::make_simple(ItemPath::single("i64")),
+                Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
+                Operator::And | Operator::Or | Operator::Xor => todo!(),
+            },
+            CompiledStatement::FunctionCall { path, arguments } => todo!(),
+        }
+    }
 }
