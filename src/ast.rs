@@ -79,7 +79,18 @@ pub fn parse_function(tokens: &mut TokenList, base_path: ItemPath) -> Result<AST
         parameters: {
             let mut parameters = Vec::new();
             tokens.expect_token(Token::LParen)?;
-            tokens.expect_token(Token::RParen)?;
+            loop {
+                if tokens.is_expected_and_take(Token::RParen)?.0 {
+                    break;
+                }
+                let data_type = parse_data_type(tokens)?;
+                let name = tokens.expect_identifier()?.0;
+                parameters.push(ASTFunctionParameter { name, data_type });
+                if !tokens.is_expected_and_take(Token::Comma)?.0 {
+                    tokens.expect_token(Token::RParen)?;
+                    break;
+                }
+            }
             parameters
         },
         body: parse_block(tokens)?,
@@ -180,7 +191,7 @@ fn parse_expression_biops(
         let mut right = parse_expression_primary(tokens)?;
         lookahead = tokens.peek()?.0.clone();
         while match lookahead {
-            Token::Operator(next_operator) => next_operator.precedence() >= operator.precedence(),
+            Token::Operator(next_operator) => next_operator.precedence() > operator.precedence(),
             _ => false,
         } {
             right = parse_expression_biops(

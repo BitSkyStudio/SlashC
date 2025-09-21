@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{ASTBlock, ASTExpression, ASTLiteral, ASTMember, ASTStatement, DataType},
+    ast::{
+        ASTBlock, ASTExpression, ASTFunctionParameter, ASTLiteral, ASTMember, ASTStatement,
+        DataType,
+    },
     lexer::Operator,
 };
 
@@ -42,13 +45,18 @@ impl Compiler {
             ASTMember::Function(function) => function,
             _ => panic!(),
         };
-        let mut context = FunctionCompileContext::new();
+        let mut context = FunctionCompileContext::new(&function.parameters);
         context.stack_push();
         let block = CompiledBlock::compile(&function.body, &mut context, self);
-        context.stack_pop();
         CompiledFunction {
             variables: context.variables,
             block,
+            parameters: function
+                .parameters
+                .iter()
+                .map(|param| param.data_type.clone())
+                .collect(),
+            return_type: function.return_type.clone(),
         }
     }
 }
@@ -57,11 +65,16 @@ pub struct FunctionCompileContext {
     variable_stack: Vec<HashMap<String, u32>>,
 }
 impl FunctionCompileContext {
-    pub fn new() -> Self {
-        FunctionCompileContext {
+    pub fn new(parameters: &Vec<ASTFunctionParameter>) -> Self {
+        let mut context = FunctionCompileContext {
             variables: Vec::new(),
             variable_stack: Vec::new(),
+        };
+        context.stack_push();
+        for param in parameters {
+            context.set_variable(&param.name, param.data_type.clone());
         }
+        context
     }
     pub fn stack_push(&mut self) {
         self.variable_stack.push(HashMap::new());
@@ -94,6 +107,8 @@ impl FunctionCompileContext {
 pub struct CompiledFunction {
     pub variables: Vec<DataType>,
     pub block: CompiledBlock,
+    pub parameters: Vec<DataType>,
+    pub return_type: DataType,
 }
 #[derive(Debug)]
 pub struct CompiledBlock {

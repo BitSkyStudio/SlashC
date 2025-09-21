@@ -8,7 +8,7 @@ use inkwell::values::{AnyValue, BasicValueEnum, PointerValue};
 use std::error::Error;
 
 use crate::ast::ASTFunction;
-use crate::compile::{CompiledFunction, CompiledStatement};
+use crate::compile::{CompiledFunction, CompiledStatement, Compiler, ItemPath};
 use crate::lexer::Operator;
 
 /// Convenience type alias for the `sum` function.
@@ -25,15 +25,19 @@ struct CodeGen<'ctx> {
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    fn jit_compile_function(
-        &self,
-        compiled_function: CompiledFunction,
-    ) -> Option<JitFunction<SumFunc>> {
-        let function_name = "test";
+    fn jit_compile_function(&self, function_name: String, compiled_function: CompiledFunction) {
         let i64_type = self.context.i64_type();
         let void_type = self.context.void_type();
-        let fn_type = void_type.fn_type(&[], false);
-        let function = self.module.add_function(function_name, fn_type, None);
+        let fn_type = i64_type.fn_type(
+            compiled_function
+                .parameters
+                .iter()
+                .map(|param| i64_type.into())
+                .collect::<Vec<_>>()
+                .as_slice(),
+            false,
+        );
+        let function = self.module.add_function(&function_name, fn_type, None);
         let basic_block = self.context.append_basic_block(function, "entry");
 
         self.builder.position_at_end(basic_block);
@@ -45,14 +49,17 @@ impl<'ctx> CodeGen<'ctx> {
             .map(|variable| self.builder.build_alloca(it, "var").unwrap())
             .collect();
 
+        for i in 0..compiled_function.parameters.len() {
+            self.builder
+                .build_store(variables[i], function.get_nth_param(i as u32).unwrap())
+                .unwrap();
+        }
+
         let mut returned = None;
         for statement in compiled_function.block.statements {
             returned = self.build_statement(&statement, &variables);
         }
-        let returned = returned.map(|v| v.into_int_value()).unwrap();
-        self.builder.build_return(Some(&returned)).unwrap();
-
-        unsafe { self.execution_engine.get_function(function_name).ok() }
+        self.builder.build_return(Some(&returned.unwrap())).unwrap();
     }
     fn build_statement<'a>(
         &'a self,
@@ -118,7 +125,8 @@ impl<'ctx> CodeGen<'ctx> {
             CompiledStatement::FunctionCall { path, arguments } => {
                 let function = self.module.get_function(&path.0.join("::")).unwrap();
 
-                self.builder
+                let returned = self
+                    .builder
                     .build_call(
                         function,
                         arguments
@@ -133,7 +141,7 @@ impl<'ctx> CodeGen<'ctx> {
                         "call",
                     )
                     .unwrap();
-                None
+                returned.try_as_basic_value().left()
             }
         }
     }
@@ -143,7 +151,7 @@ extern "C" fn printline(a: i64) {
     println!("dbg: {}", a);
 }
 
-pub fn testrun(function: CompiledFunction) -> Result<(), Box<dyn Error>> {
+pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
     let context = Context::create();
     let module = context.create_module("sum");
     let execution_engine = module.create_jit_execution_engine(OptimizationLevel::Default)?;
@@ -158,9 +166,17 @@ pub fn testrun(function: CompiledFunction) -> Result<(), Box<dyn Error>> {
         execution_engine,
     };
 
-    let sum = codegen
-        .jit_compile_function(function)
-        .ok_or("Unable to JIT compile `sum`")?;
+    codegen.jit_compile_function(
+        "foo".to_string(),
+        compiler.compile_function(ItemPath::new().extend("foo".to_string())),
+    );
+
+    codegen.jit_compile_function(
+        "test".to_string(),
+        compiler.compile_function(ItemPath::new().extend("test".to_string())),
+    );
+    let sum: JitFunction<'_, SumFunc> =
+        unsafe { codegen.execution_engine.get_function(&"test").unwrap() };
 
     unsafe {
         println!("{}", sum.call());
