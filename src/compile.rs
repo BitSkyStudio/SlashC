@@ -207,7 +207,10 @@ impl CompiledBlock {
                     op: Operator::Minus,
                 }
             }
-            _ => unimplemented!(),
+            _ => CompiledStatement::FunctionCall {
+                path: function,
+                arguments: parameters,
+            },
         }
     }
 }
