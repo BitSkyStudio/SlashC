@@ -3,11 +3,12 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::module::Module;
+use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{AnyValue, BasicValueEnum, PointerValue};
 
 use std::error::Error;
 
-use crate::ast::ASTFunction;
+use crate::ast::{ASTFunction, ASTMember, DataType};
 use crate::compile::{CompiledFunction, CompiledStatement, Compiler, ItemPath};
 use crate::lexer::Operator;
 
@@ -25,28 +26,33 @@ struct CodeGen<'ctx> {
 }
 
 impl<'ctx> CodeGen<'ctx> {
+    fn get_type(&self, path: &DataType) -> BasicTypeEnum<'ctx> {
+        let path = path.param_type.path.0.join("::");
+        match path.as_str() {
+            "i64" => self.context.i64_type().as_basic_type_enum(),
+            "bool" => self.context.bool_type().as_basic_type_enum(),
+            //todo: void
+            path => self
+                .context
+                .get_struct_type(path)
+                .unwrap()
+                .as_basic_type_enum(),
+        }
+    }
     fn jit_compile_function(&self, function_name: String, compiled_function: CompiledFunction) {
-        let i64_type = self.context.i64_type();
-        let void_type = self.context.void_type();
-        let fn_type = i64_type.fn_type(
-            compiled_function
-                .parameters
-                .iter()
-                .map(|param| i64_type.into())
-                .collect::<Vec<_>>()
-                .as_slice(),
-            false,
-        );
-        let function = self.module.add_function(&function_name, fn_type, None);
+        let function = self.module.get_function(&function_name).unwrap();
         let basic_block = self.context.append_basic_block(function, "entry");
 
         self.builder.position_at_end(basic_block);
 
-        let it = self.context.i64_type();
         let variables: Vec<_> = compiled_function
             .variables
             .iter()
-            .map(|variable| self.builder.build_alloca(it, "var").unwrap())
+            .map(|variable| {
+                self.builder
+                    .build_alloca(self.get_type(variable), "var")
+                    .unwrap()
+            })
             .collect();
 
         for i in 0..compiled_function.parameters.len() {
@@ -166,17 +172,34 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
         execution_engine,
     };
 
-    codegen.jit_compile_function(
-        "foo".to_string(),
-        compiler.compile_function(ItemPath::new().extend("foo".to_string())),
-    );
-
-    codegen.jit_compile_function(
-        "test".to_string(),
-        compiler.compile_function(ItemPath::new().extend("test".to_string())),
-    );
+    for (path, item) in &compiler.sources {
+        let name = path.0.join("::");
+        match item {
+            ASTMember::Function(function) => {
+                let fn_type: inkwell::types::FunctionType<'_> =
+                    codegen.get_type(&function.return_type).fn_type(
+                        function
+                            .parameters
+                            .iter()
+                            .map(|param| codegen.get_type(&param.data_type).into())
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                        false,
+                    );
+                codegen.module.add_function(&name, fn_type, None);
+            }
+        }
+    }
+    for (path, item) in &compiler.sources {
+        let name = path.0.join("::");
+        match item {
+            ASTMember::Function(_) => {
+                codegen.jit_compile_function(name, compiler.compile_function(path.clone()));
+            }
+        }
+    }
     let sum: JitFunction<'_, SumFunc> =
-        unsafe { codegen.execution_engine.get_function(&"test").unwrap() };
+        unsafe { codegen.execution_engine.get_function("main").unwrap() };
 
     unsafe {
         println!("{}", sum.call());

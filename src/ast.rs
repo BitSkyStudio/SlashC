@@ -240,6 +240,11 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
                 }
             }
         }
+        Token::LParen => {
+            let expression = parse_expression(tokens)?;
+            tokens.expect_token(Token::RParen)?;
+            expression
+        }
         token => return Err(anyhow::anyhow!("invalid token {token:?}")),
     };
     Ok(expression)

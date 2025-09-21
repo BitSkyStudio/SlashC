@@ -25,7 +25,7 @@ impl ItemPath {
 }
 
 pub struct Compiler {
-    sources: HashMap<ItemPath, ASTMember>,
+    pub sources: HashMap<ItemPath, ASTMember>,
 }
 impl Compiler {
     pub fn new() -> Self {
