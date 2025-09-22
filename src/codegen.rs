@@ -97,37 +97,36 @@ impl<'ctx> CodeGen<'ctx> {
                     .unwrap();
                 None
             }
-            CompiledStatement::IntegerOp { a, b, op } => match op {
-                Operator::Plus => Some(
-                    self.builder
-                        .build_int_add(
-                            Self::build_statement(self, &a, variables)
-                                .unwrap()
-                                .into_int_value(),
-                            Self::build_statement(self, &b, variables)
-                                .unwrap()
-                                .into_int_value(),
-                            "add",
-                        )
-                        .unwrap()
-                        .into(),
-                ),
-                Operator::Minus => Some(
-                    self.builder
-                        .build_int_sub(
-                            Self::build_statement(self, &a, variables)
-                                .unwrap()
-                                .into_int_value(),
-                            Self::build_statement(self, &b, variables)
-                                .unwrap()
-                                .into_int_value(),
-                            "sub",
-                        )
-                        .unwrap()
-                        .into(),
-                ),
-                _ => unimplemented!(),
-            },
+            CompiledStatement::IntegerOp { a, b, op } => {
+                let a = Self::build_statement(self, &a, variables)
+                    .unwrap()
+                    .into_int_value();
+                let b = Self::build_statement(self, &b, variables)
+                    .unwrap()
+                    .into_int_value();
+                match op {
+                    Operator::Plus => Some(self.builder.build_int_add(a, b, "add").unwrap().into()),
+                    Operator::Minus => {
+                        Some(self.builder.build_int_sub(a, b, "sub").unwrap().into())
+                    }
+                    Operator::Multiply => {
+                        Some(self.builder.build_int_mul(a, b, "mul").unwrap().into())
+                    }
+                    Operator::Divide => Some(
+                        self.builder
+                            .build_int_signed_div(a, b, "div")
+                            .unwrap()
+                            .into(),
+                    ),
+                    Operator::Modulo => Some(
+                        self.builder
+                            .build_int_signed_rem(a, b, "mod")
+                            .unwrap()
+                            .into(),
+                    ),
+                    _ => unimplemented!(),
+                }
+            }
             CompiledStatement::FunctionCall { path, arguments } => {
                 let function = self.module.get_function(&path.0.join("::")).unwrap();
 

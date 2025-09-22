@@ -203,29 +203,31 @@ impl CompiledBlock {
         context: &FunctionCompileContext,
         compiler: &Compiler,
     ) -> CompiledStatement {
-        match function.0.join("::").as_str() {
-            "i64::operator_add" => {
-                let right = parameters.pop().unwrap();
-                let left = parameters.pop().unwrap();
-                CompiledStatement::IntegerOp {
-                    a: Box::new(left),
-                    b: Box::new(right),
-                    op: Operator::Plus,
+        let name = function.0.join("::");
+        if name.starts_with("i64::operator_") {
+            let operator = &name["i64::operator_".len()..];
+            let operators = &[
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+                Operator::Modulo,
+            ];
+            for op in operators {
+                if op.get_name() == operator {
+                    let right = parameters.pop().unwrap();
+                    let left = parameters.pop().unwrap();
+                    return CompiledStatement::IntegerOp {
+                        a: Box::new(left),
+                        b: Box::new(right),
+                        op: *op,
+                    };
                 }
             }
-            "i64::operator_sub" => {
-                let right = parameters.pop().unwrap();
-                let left = parameters.pop().unwrap();
-                CompiledStatement::IntegerOp {
-                    a: Box::new(left),
-                    b: Box::new(right),
-                    op: Operator::Minus,
-                }
-            }
-            _ => CompiledStatement::FunctionCall {
-                path: function,
-                arguments: parameters,
-            },
+        }
+        CompiledStatement::FunctionCall {
+            path: function,
+            arguments: parameters,
         }
     }
 }
@@ -275,7 +277,11 @@ impl CompiledStatement {
                 Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
                 Operator::And | Operator::Or | Operator::Xor => todo!(),
             },
-            CompiledStatement::FunctionCall { path, arguments } => todo!(),
+            CompiledStatement::FunctionCall { path, arguments } => {
+                match compiler.sources.get(path).unwrap() {
+                    ASTMember::Function(function) => function.return_type.clone(),
+                }
+            }
         }
     }
 }

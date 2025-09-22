@@ -6,5 +6,5 @@ i64 main(){
     a-b
 }
 i64 foo(i64 param1){
-    (param1+param1)-1
+    (param1*param1)-1
 }
