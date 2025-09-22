@@ -1,16 +1,16 @@
-use inkwell::OptimizationLevel;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{AnyValue, BasicValueEnum, PointerValue};
+use inkwell::values::{AnyValue, BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::{IntPredicate, OptimizationLevel};
 
 use std::error::Error;
 
 use crate::ast::{ASTFunction, ASTMember, DataType};
-use crate::compile::{CompiledFunction, CompiledStatement, Compiler, ItemPath};
-use crate::lexer::Operator;
+use crate::compile::{CompiledBlock, CompiledFunction, CompiledStatement, Compiler, ItemPath};
+use crate::lexer::{Comparison, Operator};
 
 /// Convenience type alias for the `sum` function.
 ///
@@ -23,9 +23,13 @@ struct CodeGen<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     execution_engine: ExecutionEngine<'ctx>,
+    fn_value_opt: Option<FunctionValue<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
+    fn fn_value(&self) -> FunctionValue<'ctx> {
+        self.fn_value_opt.unwrap()
+    }
     fn get_type(&self, path: &DataType) -> BasicTypeEnum<'ctx> {
         let path = path.param_type.path.0.join("::");
         match path.as_str() {
@@ -39,8 +43,9 @@ impl<'ctx> CodeGen<'ctx> {
                 .as_basic_type_enum(),
         }
     }
-    fn jit_compile_function(&self, function_name: String, compiled_function: CompiledFunction) {
+    fn jit_compile_function(&mut self, function_name: String, compiled_function: CompiledFunction) {
         let function = self.module.get_function(&function_name).unwrap();
+        self.fn_value_opt = Some(function);
         let basic_block = self.context.append_basic_block(function, "entry");
 
         self.builder.position_at_end(basic_block);
@@ -61,11 +66,19 @@ impl<'ctx> CodeGen<'ctx> {
                 .unwrap();
         }
 
+        let returned = self.build_block(&compiled_function.block, &variables);
+        self.builder.build_return(Some(&returned.unwrap())).unwrap();
+    }
+    fn build_block<'a>(
+        &'a self,
+        block: &CompiledBlock,
+        variables: &Vec<PointerValue<'a>>,
+    ) -> Option<BasicValueEnum<'a>> {
         let mut returned = None;
-        for statement in compiled_function.block.statements {
+        for statement in &block.statements {
             returned = self.build_statement(&statement, &variables);
         }
-        self.builder.build_return(Some(&returned.unwrap())).unwrap();
+        returned
     }
     fn build_statement<'a>(
         &'a self,
@@ -73,9 +86,9 @@ impl<'ctx> CodeGen<'ctx> {
         variables: &Vec<PointerValue<'a>>,
     ) -> Option<BasicValueEnum<'a>> {
         match statement {
-            CompiledStatement::IntegerLiteral { value } => Some(
-                self.context
-                    .i64_type()
+            CompiledStatement::IntegerLiteral { value, data_type } => Some(
+                self.get_type(&DataType::make_simple(data_type.clone()))
+                    .into_int_type()
                     .const_int(*value as u64, false)
                     .into(),
             ),
@@ -124,7 +137,27 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap()
                             .into(),
                     ),
-                    _ => unimplemented!(),
+                    Operator::And => Some(self.builder.build_and(a, b, "and").unwrap().into()),
+                    Operator::Or => Some(self.builder.build_or(a, b, "or").unwrap().into()),
+                    Operator::Xor => Some(self.builder.build_xor(a, b, "xor").unwrap().into()),
+                    Operator::Comparison(comparison) => Some(
+                        self.builder
+                            .build_int_compare(
+                                match comparison {
+                                    Comparison::Equal => IntPredicate::EQ,
+                                    Comparison::NotEqual => IntPredicate::NE,
+                                    Comparison::Greater => IntPredicate::SGT,
+                                    Comparison::GreaterEqual => IntPredicate::SGE,
+                                    Comparison::Less => IntPredicate::SLT,
+                                    Comparison::LessEqual => IntPredicate::SLE,
+                                },
+                                a,
+                                b,
+                                "cmp",
+                            )
+                            .unwrap()
+                            .into(),
+                    ),
                 }
             }
             CompiledStatement::FunctionCall { path, arguments } => {
@@ -148,6 +181,57 @@ impl<'ctx> CodeGen<'ctx> {
                     .unwrap();
                 returned.try_as_basic_value().left()
             }
+            CompiledStatement::IfConditional {
+                condition,
+                then,
+                alt,
+            } => {
+                let parent = self.fn_value();
+                // create condition by comparing without 0.0 and returning an int
+                let cond = self
+                    .build_statement(&condition, variables)
+                    .unwrap()
+                    .into_int_value();
+
+                // build branch
+                let then_bb = self.context.append_basic_block(parent, "then");
+                let else_bb = self.context.append_basic_block(parent, "else");
+                let cont_bb = self.context.append_basic_block(parent, "ifcont");
+
+                self.builder
+                    .build_conditional_branch(cond, then_bb, else_bb)
+                    .unwrap();
+
+                // build then block
+                self.builder.position_at_end(then_bb);
+                //let then_val = self.compile_expr(consequence)?;
+                self.build_block(then, variables);
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                let then_bb = self.builder.get_insert_block().unwrap();
+
+                // build else block
+                self.builder.position_at_end(else_bb);
+                //let else_val = self.compile_expr(alternative)?;
+                if let Some(alt) = alt {
+                    self.build_block(alt, variables);
+                }
+
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                let else_bb = self.builder.get_insert_block().unwrap();
+                // emit merge block
+                self.builder.position_at_end(cont_bb);
+
+                /*let phi = self
+                    .builder
+                    .build_phi(self.context.f64_type(), "iftmp")
+                    .unwrap();
+
+                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);*/
+
+                None
+            }
         }
     }
 }
@@ -164,11 +248,12 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
     let it = context.i64_type();
     let extf = module.add_function("print", vt.fn_type(&[it.into()], false), None);
     execution_engine.add_global_mapping(&extf, printline as usize);
-    let codegen = CodeGen {
+    let mut codegen = CodeGen {
         context: &context,
         module,
         builder: context.create_builder(),
         execution_engine,
+        fn_value_opt: None,
     };
 
     for (path, item) in &compiler.sources {

@@ -140,7 +140,8 @@ pub fn parse_block(tokens: &mut TokenList) -> Result<ASTBlock> {
                 tokens.expect_token(Token::Semicolon)?;
                 statements.push(ASTStatement::Assign { left, right });
             } else {
-                if tokens.is_expected_and_take(Token::Semicolon)?.0 {
+                if tokens.is_expected_and_take(Token::Semicolon)?.0 || left.no_semicolon_required()
+                {
                     statements.push(ASTStatement::Expression(left));
                 } else {
                     tokens.expect_token(Token::RBrace)?;
@@ -245,6 +246,20 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
             tokens.expect_token(Token::RParen)?;
             expression
         }
+        Token::If => {
+            let condition = parse_expression(tokens)?;
+            let then = parse_block(tokens)?;
+            let alt = if tokens.is_expected_and_take(Token::Else)?.0 {
+                Some(parse_block(tokens)?)
+            } else {
+                None
+            };
+            ASTExpression::IfConditional {
+                condition: Box::new(condition),
+                then: Box::new(then),
+                alt: alt.map(|alt| Box::new(alt)),
+            }
+        }
         token => return Err(anyhow::anyhow!("invalid token {token:?}")),
     };
     Ok(expression)
@@ -264,10 +279,16 @@ pub enum ASTExpression {
     VariableAccess {
         variable: String,
     },
+    IfConditional {
+        condition: Box<ASTExpression>,
+        then: Box<ASTBlock>,
+        alt: Option<Box<ASTBlock>>,
+    },
 }
 impl ASTExpression {
     pub fn no_semicolon_required(&self) -> bool {
         match self {
+            ASTExpression::IfConditional { .. } => true,
             _ => false,
         }
     }

@@ -5,7 +5,7 @@ use crate::{
         ASTBlock, ASTExpression, ASTFunctionParameter, ASTLiteral, ASTMember, ASTStatement,
         DataType,
     },
-    lexer::Operator,
+    lexer::{Comparison, Operator},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -161,9 +161,15 @@ impl CompiledBlock {
     ) -> CompiledStatement {
         match expression {
             ASTExpression::Literal(literal) => match literal {
-                ASTLiteral::Integer(value) => CompiledStatement::IntegerLiteral { value: *value },
+                ASTLiteral::Integer(value) => CompiledStatement::IntegerLiteral {
+                    value: *value,
+                    data_type: ItemPath::single("i64"),
+                },
                 ASTLiteral::Float(_) => todo!(),
-                ASTLiteral::Bool(_) => todo!(),
+                ASTLiteral::Bool(value) => CompiledStatement::IntegerLiteral {
+                    value: if *value { 1 } else { 0 },
+                    data_type: ItemPath::single("bool"),
+                },
             },
             ASTExpression::Operator {
                 left,
@@ -195,6 +201,17 @@ impl CompiledBlock {
             ASTExpression::VariableAccess { variable } => CompiledStatement::LoadVariable {
                 variable: context.get_variable_id(&variable).unwrap(),
             },
+            ASTExpression::IfConditional {
+                condition,
+                then,
+                alt,
+            } => CompiledStatement::IfConditional {
+                condition: Box::new(Self::compile_expression(&condition, context, compiler)),
+                then: Box::new(Self::compile(&then, context, compiler)),
+                alt: alt
+                    .as_ref()
+                    .map(|alt| Box::new(Self::compile(&alt, context, compiler))),
+            },
         }
     }
     pub fn make_function_call(
@@ -204,24 +221,41 @@ impl CompiledBlock {
         compiler: &Compiler,
     ) -> CompiledStatement {
         let name = function.0.join("::");
-        if name.starts_with("i64::operator_") {
-            let operator = &name["i64::operator_".len()..];
-            let operators = &[
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Multiply,
-                Operator::Divide,
-                Operator::Modulo,
-            ];
-            for op in operators {
-                if op.get_name() == operator {
-                    let right = parameters.pop().unwrap();
-                    let left = parameters.pop().unwrap();
-                    return CompiledStatement::IntegerOp {
-                        a: Box::new(left),
-                        b: Box::new(right),
-                        op: *op,
-                    };
+        for (base_int_type, number) in [("i64", true), ("bool", false)] {
+            if name.starts_with(base_int_type)
+                && name[base_int_type.len()..].starts_with("::operator_")
+            {
+                let operator = &name["::operator_".len() + base_int_type.len()..];
+                let operators = if number {
+                    &[
+                        Operator::Plus,
+                        Operator::Minus,
+                        Operator::Multiply,
+                        Operator::Divide,
+                        Operator::Modulo,
+                        Operator::And,
+                        Operator::Or,
+                        Operator::Xor,
+                        Operator::Comparison(Comparison::Equal),
+                        Operator::Comparison(Comparison::NotEqual),
+                        Operator::Comparison(Comparison::Greater),
+                        Operator::Comparison(Comparison::GreaterEqual),
+                        Operator::Comparison(Comparison::Less),
+                        Operator::Comparison(Comparison::LessEqual),
+                    ][..]
+                } else {
+                    &[Operator::And, Operator::Or, Operator::Xor][..]
+                };
+                for op in operators {
+                    if op.get_name() == operator {
+                        let right = parameters.pop().unwrap();
+                        let left = parameters.pop().unwrap();
+                        return CompiledStatement::IntegerOp {
+                            a: Box::new(left),
+                            b: Box::new(right),
+                            op: *op,
+                        };
+                    }
                 }
             }
         }
@@ -234,6 +268,7 @@ impl CompiledBlock {
 #[derive(Debug)]
 pub enum CompiledStatement {
     IntegerLiteral {
+        data_type: ItemPath,
         value: i64,
     },
     LoadVariable {
@@ -252,6 +287,11 @@ pub enum CompiledStatement {
         path: ItemPath,
         arguments: Vec<CompiledStatement>,
     },
+    IfConditional {
+        condition: Box<CompiledStatement>,
+        then: Box<CompiledBlock>,
+        alt: Option<Box<CompiledBlock>>,
+    },
 }
 impl CompiledStatement {
     pub fn get_return_type(
@@ -260,8 +300,8 @@ impl CompiledStatement {
         compiler: &Compiler,
     ) -> DataType {
         match self {
-            CompiledStatement::IntegerLiteral { value } => {
-                DataType::make_simple(ItemPath::single("i64"))
+            CompiledStatement::IntegerLiteral { value, data_type } => {
+                DataType::make_simple(data_type.clone())
             }
             CompiledStatement::LoadVariable { variable } => {
                 context.get_variable_type(*variable).clone()
@@ -272,7 +312,7 @@ impl CompiledStatement {
                 | Operator::Minus
                 | Operator::Multiply
                 | Operator::Divide
-                | Operator::Modulo => DataType::make_simple(ItemPath::single("i64")),
+                | Operator::Modulo => a.get_return_type(context, compiler),
                 Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
                 Operator::And | Operator::Or | Operator::Xor => todo!(),
             },
@@ -280,6 +320,14 @@ impl CompiledStatement {
                 match compiler.sources.get(path).unwrap() {
                     ASTMember::Function(function) => function.return_type.clone(),
                 }
+            }
+            CompiledStatement::IfConditional {
+                condition,
+                then,
+                alt,
+            } => {
+                //todo
+                DataType::void()
             }
         }
     }

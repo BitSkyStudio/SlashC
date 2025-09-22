@@ -424,7 +424,12 @@ impl Operator {
             Operator::And => "and",
             Operator::Or => "or",
             Operator::Xor => "xor",
-            Operator::Comparison(_) => "cmp",
+            Operator::Comparison(Comparison::Equal) => "cmp_eq",
+            Operator::Comparison(Comparison::NotEqual) => "cmp_ne",
+            Operator::Comparison(Comparison::Greater) => "cmp_gt",
+            Operator::Comparison(Comparison::GreaterEqual) => "cmp_ge",
+            Operator::Comparison(Comparison::Less) => "cmp_lt",
+            Operator::Comparison(Comparison::LessEqual) => "cmp_le",
         }
     }
     pub fn precedence(self) -> u8 {
