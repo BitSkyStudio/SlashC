@@ -132,9 +132,6 @@ pub fn lex(input: String) -> anyhow::Result<Vec<(Token, TokenPosition)>> {
     config.keywords.push(("struct", Token::Struct));
     config.keywords.push(("let", Token::Let));
     config.keywords.push((";", Token::Semicolon));
-    config
-        .keywords
-        .push(("!", Token::Operator(Operator::Negate)));
     config.keywords.push((".", Token::Dot));
     config.keywords.push(("=>", Token::Cast));
     config.keywords.push(("=?>", Token::DynamicCast));
@@ -411,7 +408,6 @@ pub enum Operator {
     Multiply,
     Divide,
     Modulo,
-    Negate,
     And,
     Or,
     Xor,
@@ -425,7 +421,6 @@ impl Operator {
             Operator::Multiply => "mul",
             Operator::Divide => "div",
             Operator::Modulo => "mod",
-            Operator::Negate => "neg",
             Operator::And => "and",
             Operator::Or => "or",
             Operator::Xor => "xor",
@@ -434,7 +429,6 @@ impl Operator {
     }
     pub fn precedence(self) -> u8 {
         match self {
-            Operator::Negate => 0,
             Operator::Plus | Operator::Minus => 1,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 2,
             Operator::Comparison(_) => 3,
@@ -451,18 +445,4 @@ pub enum Comparison {
     GreaterEqual,
     Less,
     LessEqual,
-}
-impl Operator {
-    pub fn is_unary(&self) -> bool {
-        match self {
-            Operator::Minus | Operator::Negate => true,
-            _ => false,
-        }
-    }
-    pub fn is_middle_op(&self) -> bool {
-        match self {
-            Operator::Negate => false,
-            _ => true,
-        }
-    }
 }

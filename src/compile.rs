@@ -272,8 +272,7 @@ impl CompiledStatement {
                 | Operator::Minus
                 | Operator::Multiply
                 | Operator::Divide
-                | Operator::Modulo
-                | Operator::Negate => DataType::make_simple(ItemPath::single("i64")),
+                | Operator::Modulo => DataType::make_simple(ItemPath::single("i64")),
                 Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
                 Operator::And | Operator::Or | Operator::Xor => todo!(),
             },
