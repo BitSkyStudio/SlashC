@@ -434,11 +434,11 @@ impl Operator {
     }
     pub fn precedence(self) -> u8 {
         match self {
-            Operator::Plus | Operator::Minus => 1,
-            Operator::Multiply | Operator::Divide | Operator::Modulo => 2,
+            Operator::Or | Operator::Xor => 1,
+            Operator::And => 2,
             Operator::Comparison(_) => 3,
-            Operator::Or | Operator::Xor => 4,
-            Operator::And => 5,
+            Operator::Plus | Operator::Minus => 4,
+            Operator::Multiply | Operator::Divide | Operator::Modulo => 5,
         }
     }
 }

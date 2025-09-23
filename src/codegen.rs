@@ -185,6 +185,7 @@ impl<'ctx> CodeGen<'ctx> {
                 condition,
                 then,
                 alt,
+                returned_type,
             } => {
                 let parent = self.fn_value();
                 // create condition by comparing without 0.0 and returning an int
@@ -205,7 +206,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // build then block
                 self.builder.position_at_end(then_bb);
                 //let then_val = self.compile_expr(consequence)?;
-                self.build_block(then, variables);
+                let then_val = self.build_block(then, variables);
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
 
                 let then_bb = self.builder.get_insert_block().unwrap();
@@ -213,9 +214,11 @@ impl<'ctx> CodeGen<'ctx> {
                 // build else block
                 self.builder.position_at_end(else_bb);
                 //let else_val = self.compile_expr(alternative)?;
-                if let Some(alt) = alt {
-                    self.build_block(alt, variables);
-                }
+                let else_val = if let Some(alt) = alt {
+                    self.build_block(alt, variables)
+                } else {
+                    None
+                };
 
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
 
@@ -223,14 +226,19 @@ impl<'ctx> CodeGen<'ctx> {
                 // emit merge block
                 self.builder.position_at_end(cont_bb);
 
-                /*let phi = self
-                    .builder
-                    .build_phi(self.context.f64_type(), "iftmp")
-                    .unwrap();
-
-                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);*/
-
-                None
+                if returned_type.param_type.path.0 == vec!["void".to_string()] {
+                    None
+                } else {
+                    let phi = self
+                        .builder
+                        .build_phi(self.get_type(returned_type), "iftmp")
+                        .unwrap();
+                    phi.add_incoming(&[
+                        (&then_val.unwrap(), then_bb),
+                        (&else_val.unwrap(), else_bb),
+                    ]);
+                    Some(phi.as_basic_value())
+                }
             }
             CompiledStatement::WhileLoop { condition, body } => {
                 let parent = self.fn_value();

@@ -113,6 +113,7 @@ pub struct CompiledFunction {
 #[derive(Debug)]
 pub struct CompiledBlock {
     pub statements: Vec<CompiledStatement>,
+    pub returns: bool,
 }
 impl CompiledBlock {
     fn compile(
@@ -152,7 +153,10 @@ impl CompiledBlock {
         if let Some(expression) = &block.return_expression {
             statements.push(Self::compile_expression(expression, context, compiler));
         }
-        CompiledBlock { statements }
+        CompiledBlock {
+            statements,
+            returns: block.return_expression.is_some(),
+        }
     }
     fn compile_expression(
         expression: &ASTExpression,
@@ -205,13 +209,17 @@ impl CompiledBlock {
                 condition,
                 then,
                 alt,
-            } => CompiledStatement::IfConditional {
-                condition: Box::new(Self::compile_expression(&condition, context, compiler)),
-                then: Box::new(Self::compile(&then, context, compiler)),
-                alt: alt
-                    .as_ref()
-                    .map(|alt| Box::new(Self::compile(&alt, context, compiler))),
-            },
+            } => {
+                let then = Box::new(Self::compile(&then, context, compiler));
+                CompiledStatement::IfConditional {
+                    condition: Box::new(Self::compile_expression(&condition, context, compiler)),
+                    returned_type: then.get_return_type(context, compiler), //check else
+                    then,
+                    alt: alt
+                        .as_ref()
+                        .map(|alt| Box::new(Self::compile(&alt, context, compiler))),
+                }
+            }
             ASTExpression::WhileLoop { condition, body } => CompiledStatement::WhileLoop {
                 condition: Box::new(Self::compile_expression(&condition, context, compiler)),
                 body: Box::new(Self::compile(&body, context, compiler)),
@@ -268,6 +276,20 @@ impl CompiledBlock {
             arguments: parameters,
         }
     }
+    pub fn get_return_type(
+        &self,
+        context: &FunctionCompileContext,
+        compiler: &Compiler,
+    ) -> DataType {
+        if self.returns {
+            self.statements
+                .last()
+                .map(|statement| statement.get_return_type(context, compiler))
+                .unwrap_or(DataType::void())
+        } else {
+            DataType::void()
+        }
+    }
 }
 #[derive(Debug)]
 pub enum CompiledStatement {
@@ -295,6 +317,7 @@ pub enum CompiledStatement {
         condition: Box<CompiledStatement>,
         then: Box<CompiledBlock>,
         alt: Option<Box<CompiledBlock>>,
+        returned_type: DataType,
     },
     WhileLoop {
         condition: Box<CompiledStatement>,
@@ -331,14 +354,7 @@ impl CompiledStatement {
                     ASTMember::Function(function) => function.return_type.clone(),
                 }
             }
-            CompiledStatement::IfConditional {
-                condition,
-                then,
-                alt,
-            } => {
-                //todo
-                DataType::void()
-            }
+            CompiledStatement::IfConditional { returned_type, .. } => returned_type.clone(),
             CompiledStatement::WhileLoop { condition, body } => DataType::void(),
         }
     }
