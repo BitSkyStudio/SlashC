@@ -1,6 +1,6 @@
 use crate::{
     compile::{CompiledStatement, ItemPath},
-    lexer::{Comparison, Operator, Token, TokenList},
+    lexer::{Comparison, Operator, Token, TokenList, UnaryOperator},
 };
 use anyhow::{Result, anyhow};
 
@@ -229,6 +229,17 @@ fn parse_expression_biops(
     Ok(left)
 }
 pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression> {
+    let unary_operator = match tokens.peek()?.0 {
+        Token::Not => {
+            tokens.take().unwrap();
+            Some(UnaryOperator::Not)
+        }
+        Token::Operator(Operator::Minus) => {
+            tokens.take().unwrap();
+            Some(UnaryOperator::Negate)
+        }
+        _ => None,
+    };
     let mut expression = match tokens.take()?.0 {
         Token::Integer(value) => ASTExpression::Literal(ASTLiteral::Integer(value)),
         Token::Number(value) => ASTExpression::Literal(ASTLiteral::Float(value)),
@@ -285,7 +296,13 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
         }
         token => return Err(anyhow::anyhow!("invalid token {token:?}")),
     };
-    Ok(expression)
+    Ok(match unary_operator {
+        Some(operator) => ASTExpression::UnaryOperator {
+            expression: Box::new(expression),
+            operator,
+        },
+        None => expression,
+    })
 }
 #[derive(Clone, Debug)]
 pub enum ASTExpression {
@@ -294,6 +311,10 @@ pub enum ASTExpression {
         left: Box<ASTExpression>,
         right: Box<ASTExpression>,
         operator: Operator,
+    },
+    UnaryOperator {
+        expression: Box<ASTExpression>,
+        operator: UnaryOperator,
     },
     FunctionCall {
         function: ItemPath,
@@ -327,23 +348,53 @@ pub enum ASTLiteral {
     Bool(bool),
 }
 
+#[derive(Debug)]
+pub struct ASTStruct {
+    pub name: ItemPath,
+    pub fields: Vec<ASTStructField>,
+}
+#[derive(Debug)]
+pub struct ASTStructField {
+    pub name: String,
+    pub data_type: DataType,
+}
+
+pub fn parse_struct(tokens: &mut TokenList, base_path: ItemPath) -> Result<ASTStruct> {
+    let name = base_path.extend(tokens.expect_identifier()?.0);
+    tokens.expect_token(Token::LBrace)?;
+    let mut fields = Vec::new();
+    while !tokens.is_expected_and_take(Token::RBrace)?.0 {
+        let data_type = parse_data_type(tokens)?;
+        let name = tokens.expect_identifier()?.0;
+        tokens.expect_token(Token::Semicolon)?;
+        fields.push(ASTStructField { name, data_type });
+    }
+    Ok(ASTStruct { name, fields })
+}
+
 pub enum ASTMember {
     Function(ASTFunction),
+    Struct(ASTStruct),
 }
 impl ASTMember {
     pub fn get_path(&self) -> &ItemPath {
         match self {
             ASTMember::Function(function) => &function.name,
+            ASTMember::Struct(structure) => &structure.name,
         }
     }
 }
 pub fn parse_sources(tokens: &mut TokenList) -> Result<Vec<ASTMember>> {
     let mut members = Vec::new();
     while !tokens.is_empty() {
-        members.push(ASTMember::Function(parse_function(
-            tokens,
-            ItemPath::new(),
-        )?));
+        if tokens.is_expected_and_take(Token::Struct)?.0 {
+            members.push(ASTMember::Struct(parse_struct(tokens, ItemPath::new())?));
+        } else {
+            members.push(ASTMember::Function(parse_function(
+                tokens,
+                ItemPath::new(),
+            )?));
+        }
     }
     Ok(members)
 }

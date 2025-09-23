@@ -3,7 +3,7 @@ i64 main(){
     i64 b = 3;
     print(a + b);
     print(foo(a+b));
-    print(if (a >= b) ^ false ^ false{
+    print(-if !(a >= b){
         10
     } else {
         5
@@ -25,4 +25,8 @@ i64 sum(i64 n){
     } else {
         n + sum(n - 1)
     }
+}
+
+struct Counter{
+    i64 count;
 }

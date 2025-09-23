@@ -10,7 +10,7 @@ use std::error::Error;
 
 use crate::ast::{ASTFunction, ASTMember, DataType};
 use crate::compile::{CompiledBlock, CompiledFunction, CompiledStatement, Compiler, ItemPath};
-use crate::lexer::{Comparison, Operator};
+use crate::lexer::{Comparison, Operator, UnaryOperator};
 
 /// Convenience type alias for the `sum` function.
 ///
@@ -92,10 +92,13 @@ impl<'ctx> CodeGen<'ctx> {
                     .const_int(*value as u64, false)
                     .into(),
             ),
-            CompiledStatement::LoadVariable { variable } => Some(
+            CompiledStatement::LoadVariable {
+                variable,
+                data_type,
+            } => Some(
                 self.builder
                     .build_load(
-                        self.context.i64_type(),
+                        self.get_type(data_type),
                         variables[*variable as usize],
                         "loadvar",
                     )
@@ -158,6 +161,17 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap()
                             .into(),
                     ),
+                }
+            }
+            CompiledStatement::IntegerUnaryOp { a, op } => {
+                let a = Self::build_statement(self, &a, variables)
+                    .unwrap()
+                    .into_int_value();
+                match op {
+                    UnaryOperator::Not => Some(self.builder.build_not(a, "not").unwrap().into()),
+                    UnaryOperator::Negate => {
+                        Some(self.builder.build_int_neg(a, "neg").unwrap().into())
+                    }
                 }
             }
             CompiledStatement::FunctionCall { path, arguments } => {
@@ -315,6 +329,9 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
                     );
                 codegen.module.add_function(&name, fn_type, None);
             }
+            ASTMember::Struct(structure) => {
+                codegen.context.opaque_struct_type(&name);
+            }
         }
     }
     for (path, item) in &compiler.sources {
@@ -323,8 +340,22 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
             ASTMember::Function(_) => {
                 codegen.jit_compile_function(name, compiler.compile_function(path.clone()));
             }
+            ASTMember::Struct(structure) => {
+                codegen.context.get_struct_type(&name).unwrap().set_body(
+                    structure
+                        .fields
+                        .iter()
+                        .map(|param| codegen.get_type(&param.data_type).into())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    false,
+                );
+            }
         }
     }
+
+    println!("{}", codegen.module.print_to_string().to_string());
+
     let sum: JitFunction<'_, SumFunc> =
         unsafe { codegen.execution_engine.get_function("main").unwrap() };
 

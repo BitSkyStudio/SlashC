@@ -40,6 +40,7 @@ pub enum Token {
     Enum,
     Mut,
     Match,
+    Not,
 }
 #[derive(Debug, Clone)]
 pub struct TokenPosition {
@@ -87,6 +88,7 @@ pub fn lex(input: String) -> anyhow::Result<Vec<(Token, TokenPosition)>> {
     config.keywords.push((":", Token::Colon));
     config.keywords.push((",", Token::Comma));
     config.keywords.push(("->", Token::Arrow));
+    config.keywords.push(("!", Token::Not));
     config.keywords.push(("+", Token::Operator(Operator::Plus)));
     config
         .keywords
@@ -400,7 +402,19 @@ impl TokenList {
         }
     }
 }
-
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum UnaryOperator {
+    Negate,
+    Not,
+}
+impl UnaryOperator {
+    pub fn get_name(self) -> &'static str {
+        match self {
+            UnaryOperator::Negate => "neg",
+            UnaryOperator::Not => "not",
+        }
+    }
+}
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Operator {
     Plus,

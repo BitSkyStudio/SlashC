@@ -5,7 +5,7 @@ use crate::{
         ASTBlock, ASTExpression, ASTFunctionParameter, ASTLiteral, ASTMember, ASTStatement,
         DataType,
     },
-    lexer::{Comparison, Operator},
+    lexer::{Comparison, Operator, UnaryOperator},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -46,7 +46,6 @@ impl Compiler {
             _ => panic!(),
         };
         let mut context = FunctionCompileContext::new(&function.parameters);
-        context.stack_push();
         let block = CompiledBlock::compile(&function.body, &mut context, self);
         CompiledFunction {
             variables: context.variables,
@@ -121,6 +120,7 @@ impl CompiledBlock {
         context: &mut FunctionCompileContext,
         compiler: &Compiler,
     ) -> Self {
+        context.stack_push();
         let mut statements = Vec::new();
         for statement in &block.statements {
             match statement {
@@ -153,6 +153,7 @@ impl CompiledBlock {
         if let Some(expression) = &block.return_expression {
             statements.push(Self::compile_expression(expression, context, compiler));
         }
+        context.stack_pop();
         CompiledBlock {
             statements,
             returns: block.return_expression.is_some(),
@@ -183,11 +184,27 @@ impl CompiledBlock {
                 let left = Self::compile_expression(left, context, compiler);
                 let right = Self::compile_expression(right, context, compiler);
                 Self::make_function_call(
-                    left.get_return_type(context, compiler)
+                    left.get_return_type(compiler)
                         .param_type
                         .path
                         .extend(format!("operator_{}", operator.get_name())),
                     vec![left, right],
+                    context,
+                    compiler,
+                )
+            }
+            ASTExpression::UnaryOperator {
+                expression,
+                operator,
+            } => {
+                let expression = Self::compile_expression(expression, context, compiler);
+                Self::make_function_call(
+                    expression
+                        .get_return_type(compiler)
+                        .param_type
+                        .path
+                        .extend(format!("operator_{}", operator.get_name())),
+                    vec![expression],
                     context,
                     compiler,
                 )
@@ -202,9 +219,13 @@ impl CompiledBlock {
                     .map(|expression| Self::compile_expression(expression, context, compiler))
                     .collect(),
             },
-            ASTExpression::VariableAccess { variable } => CompiledStatement::LoadVariable {
-                variable: context.get_variable_id(&variable).unwrap(),
-            },
+            ASTExpression::VariableAccess { variable } => {
+                let variable = context.get_variable_id(&variable).unwrap();
+                CompiledStatement::LoadVariable {
+                    variable,
+                    data_type: context.get_variable_type(variable).clone(),
+                }
+            }
             ASTExpression::IfConditional {
                 condition,
                 then,
@@ -258,6 +279,11 @@ impl CompiledBlock {
                 } else {
                     &[Operator::And, Operator::Or, Operator::Xor][..]
                 };
+                let unary_operators = if number {
+                    &[UnaryOperator::Negate][..]
+                } else {
+                    &[UnaryOperator::Not][..]
+                };
                 for op in operators {
                     if op.get_name() == operator {
                         let right = parameters.pop().unwrap();
@@ -265,6 +291,15 @@ impl CompiledBlock {
                         return CompiledStatement::IntegerOp {
                             a: Box::new(left),
                             b: Box::new(right),
+                            op: *op,
+                        };
+                    }
+                }
+                for op in unary_operators {
+                    if op.get_name() == operator {
+                        let expression = parameters.pop().unwrap();
+                        return CompiledStatement::IntegerUnaryOp {
+                            a: Box::new(expression),
                             op: *op,
                         };
                     }
@@ -284,7 +319,7 @@ impl CompiledBlock {
         if self.returns {
             self.statements
                 .last()
-                .map(|statement| statement.get_return_type(context, compiler))
+                .map(|statement| statement.get_return_type(compiler))
                 .unwrap_or(DataType::void())
         } else {
             DataType::void()
@@ -299,6 +334,7 @@ pub enum CompiledStatement {
     },
     LoadVariable {
         variable: u32,
+        data_type: DataType,
     },
     StoreVariable {
         variable: u32,
@@ -308,6 +344,10 @@ pub enum CompiledStatement {
         a: Box<CompiledStatement>,
         b: Box<CompiledStatement>,
         op: Operator,
+    },
+    IntegerUnaryOp {
+        a: Box<CompiledStatement>,
+        op: UnaryOperator,
     },
     FunctionCall {
         path: ItemPath,
@@ -325,18 +365,15 @@ pub enum CompiledStatement {
     },
 }
 impl CompiledStatement {
-    pub fn get_return_type(
-        &self,
-        context: &FunctionCompileContext,
-        compiler: &Compiler,
-    ) -> DataType {
+    pub fn get_return_type(&self, compiler: &Compiler) -> DataType {
         match self {
             CompiledStatement::IntegerLiteral { value, data_type } => {
                 DataType::make_simple(data_type.clone())
             }
-            CompiledStatement::LoadVariable { variable } => {
-                context.get_variable_type(*variable).clone()
-            }
+            CompiledStatement::LoadVariable {
+                variable,
+                data_type,
+            } => data_type.clone(),
             CompiledStatement::StoreVariable { variable, value } => DataType::void(),
             CompiledStatement::IntegerOp { a, b, op } => match op {
                 Operator::Plus
@@ -346,12 +383,14 @@ impl CompiledStatement {
                 | Operator::Modulo
                 | Operator::And
                 | Operator::Or
-                | Operator::Xor => a.get_return_type(context, compiler),
+                | Operator::Xor => a.get_return_type(compiler),
                 Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
             },
+            CompiledStatement::IntegerUnaryOp { a, op } => a.get_return_type(compiler),
             CompiledStatement::FunctionCall { path, arguments } => {
                 match compiler.sources.get(path).unwrap() {
                     ASTMember::Function(function) => function.return_type.clone(),
+                    _ => panic!(),
                 }
             }
             CompiledStatement::IfConditional { returned_type, .. } => returned_type.clone(),
