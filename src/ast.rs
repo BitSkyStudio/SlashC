@@ -260,6 +260,14 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
                 alt: alt.map(|alt| Box::new(alt)),
             }
         }
+        Token::While => {
+            let condition = parse_expression(tokens)?;
+            let body = parse_block(tokens)?;
+            ASTExpression::WhileLoop {
+                condition: Box::new(condition),
+                body: Box::new(body),
+            }
+        }
         token => return Err(anyhow::anyhow!("invalid token {token:?}")),
     };
     Ok(expression)
@@ -284,11 +292,15 @@ pub enum ASTExpression {
         then: Box<ASTBlock>,
         alt: Option<Box<ASTBlock>>,
     },
+    WhileLoop {
+        condition: Box<ASTExpression>,
+        body: Box<ASTBlock>,
+    },
 }
 impl ASTExpression {
     pub fn no_semicolon_required(&self) -> bool {
         match self {
-            ASTExpression::IfConditional { .. } => true,
+            ASTExpression::IfConditional { .. } | ASTExpression::WhileLoop { .. } => true,
             _ => false,
         }
     }

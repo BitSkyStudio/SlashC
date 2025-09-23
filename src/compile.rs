@@ -212,6 +212,10 @@ impl CompiledBlock {
                     .as_ref()
                     .map(|alt| Box::new(Self::compile(&alt, context, compiler))),
             },
+            ASTExpression::WhileLoop { condition, body } => CompiledStatement::WhileLoop {
+                condition: Box::new(Self::compile_expression(&condition, context, compiler)),
+                body: Box::new(Self::compile(&body, context, compiler)),
+            },
         }
     }
     pub fn make_function_call(
@@ -292,6 +296,10 @@ pub enum CompiledStatement {
         then: Box<CompiledBlock>,
         alt: Option<Box<CompiledBlock>>,
     },
+    WhileLoop {
+        condition: Box<CompiledStatement>,
+        body: Box<CompiledBlock>,
+    },
 }
 impl CompiledStatement {
     pub fn get_return_type(
@@ -312,9 +320,11 @@ impl CompiledStatement {
                 | Operator::Minus
                 | Operator::Multiply
                 | Operator::Divide
-                | Operator::Modulo => a.get_return_type(context, compiler),
+                | Operator::Modulo
+                | Operator::And
+                | Operator::Or
+                | Operator::Xor => a.get_return_type(context, compiler),
                 Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
-                Operator::And | Operator::Or | Operator::Xor => todo!(),
             },
             CompiledStatement::FunctionCall { path, arguments } => {
                 match compiler.sources.get(path).unwrap() {
@@ -329,6 +339,7 @@ impl CompiledStatement {
                 //todo
                 DataType::void()
             }
+            CompiledStatement::WhileLoop { condition, body } => DataType::void(),
         }
     }
 }

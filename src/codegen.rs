@@ -232,6 +232,41 @@ impl<'ctx> CodeGen<'ctx> {
 
                 None
             }
+            CompiledStatement::WhileLoop { condition, body } => {
+                let parent = self.fn_value();
+                // create condition by comparing without 0.0 and returning an int
+
+                // build branch
+
+                let cond_bb = self.context.append_basic_block(parent, "cond");
+                let body_bb = self.context.append_basic_block(parent, "body");
+                let end_bb = self.context.append_basic_block(parent, "whilecont");
+
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(cond_bb);
+                let cond = self
+                    .build_statement(&condition, variables)
+                    .unwrap()
+                    .into_int_value();
+                self.builder
+                    .build_conditional_branch(cond, body_bb, end_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                self.build_block(&body, variables);
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                self.builder.position_at_end(end_bb);
+
+                /*let phi = self
+                    .builder
+                    .build_phi(self.context.f64_type(), "iftmp")
+                    .unwrap();
+
+                phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);*/
+
+                None
+            }
         }
     }
 }

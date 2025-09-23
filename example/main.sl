@@ -3,10 +3,15 @@ i64 main(){
     i64 b = 3;
     print(a + b);
     print(foo(a+b));
-    if a >= b{
+    if (a >= b) ^ true ^ false{
         print(10);
     } else {
         print(5);
+    }
+    i64 i = 0;
+    while i < 10 {
+        i = i+1;
+        print(i);
     }
     a-b
 }
