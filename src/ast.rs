@@ -101,7 +101,7 @@ pub struct ASTFunctionParameter {
     pub name: String,
     pub data_type: DataType,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ASTBlock {
     pub statements: Vec<ASTStatement>,
     pub return_expression: Option<ASTExpression>,
@@ -135,20 +135,35 @@ pub fn parse_block(tokens: &mut TokenList) -> Result<ASTBlock> {
                     });
                 }
             }
-            if tokens.is_expected_and_take(Token::Assign(None))?.0 {
-                let right = parse_expression(tokens)?;
-                tokens.expect_token(Token::Semicolon)?;
-                statements.push(ASTStatement::Assign { left, right });
-            } else {
-                if tokens.is_expected_and_take(Token::Semicolon)?.0 || left.no_semicolon_required()
-                {
-                    statements.push(ASTStatement::Expression(left));
-                } else {
-                    tokens.expect_token(Token::RBrace)?;
-                    return Ok(ASTBlock {
-                        statements,
-                        return_expression: Some(left),
+            match tokens.peek()?.0.clone() {
+                Token::Assign(operator) => {
+                    tokens.take().unwrap();
+                    let right = parse_expression(tokens)?;
+                    tokens.expect_token(Token::Semicolon)?;
+                    statements.push(ASTStatement::Assign {
+                        right: match operator {
+                            Some(operator) => ASTExpression::Operator {
+                                left: Box::new(left.clone()),
+                                right: Box::new(right),
+                                operator,
+                            },
+                            None => right,
+                        },
+                        left,
                     });
+                }
+                _ => {
+                    if tokens.is_expected_and_take(Token::Semicolon)?.0
+                        || left.no_semicolon_required()
+                    {
+                        statements.push(ASTStatement::Expression(left));
+                    } else {
+                        tokens.expect_token(Token::RBrace)?;
+                        return Ok(ASTBlock {
+                            statements,
+                            return_expression: Some(left),
+                        });
+                    }
                 }
             }
         }
@@ -158,7 +173,7 @@ pub fn parse_block(tokens: &mut TokenList) -> Result<ASTBlock> {
         return_expression: None,
     })
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTStatement {
     Expression(ASTExpression),
     Assign {
@@ -272,7 +287,7 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
     };
     Ok(expression)
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ASTExpression {
     Literal(ASTLiteral),
     Operator {
@@ -305,7 +320,7 @@ impl ASTExpression {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum ASTLiteral {
     Integer(i64),
     Float(f64),
