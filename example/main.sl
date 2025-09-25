@@ -1,7 +1,9 @@
 i64 main(){
     i64 a = 5;
     i64 b = 3;
-    print(a + b);
+    //Counter cnt = 0;
+    //cnt.count = 10;
+    //print(a + b + cnt.count);
     print(foo(a+b));
     print(-if !(a >= b){
         10

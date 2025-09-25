@@ -3,7 +3,7 @@ use inkwell::context::Context;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{AnyValue, BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{AnyValue, BasicValue, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{IntPredicate, OptimizationLevel};
 
 use std::error::Error;
@@ -92,22 +92,16 @@ impl<'ctx> CodeGen<'ctx> {
                     .const_int(*value as u64, false)
                     .into(),
             ),
-            CompiledStatement::LoadVariable {
+            CompiledStatement::GetVariable {
                 variable,
                 data_type,
-            } => Some(
-                self.builder
-                    .build_load(
-                        self.get_type(data_type),
-                        variables[*variable as usize],
-                        "loadvar",
-                    )
-                    .unwrap(),
-            ),
-            CompiledStatement::StoreVariable { variable, value } => {
+            } => Some(variables[*variable as usize].as_basic_value_enum()),
+            CompiledStatement::Store { target, value } => {
                 self.builder
                     .build_store(
-                        variables[*variable as usize],
+                        Self::build_statement(self, target, variables)
+                            .unwrap()
+                            .into_pointer_value(),
                         Self::build_statement(self, value, variables).unwrap(),
                     )
                     .unwrap();
@@ -289,6 +283,37 @@ impl<'ctx> CodeGen<'ctx> {
 
                 None
             }
+            CompiledStatement::MemberAccess {
+                parent,
+                member,
+                returned_type,
+            } => Some(unsafe {
+                self.builder
+                    .build_gep(
+                        self.get_type(returned_type), //todo: maybe incorect?
+                        Self::build_statement(self, &parent, variables)
+                            .unwrap()
+                            .into_pointer_value(),
+                        &[self.context.i64_type().const_int(*member as u64, false)],
+                        "gep",
+                    )
+                    .unwrap()
+                    .as_basic_value_enum()
+            }),
+            CompiledStatement::Dereference {
+                parent,
+                returned_type,
+            } => Some(
+                self.builder
+                    .build_load(
+                        self.get_type(returned_type),
+                        Self::build_statement(self, &parent, variables)
+                            .unwrap()
+                            .into_pointer_value(),
+                        "load",
+                    )
+                    .unwrap(),
+            ),
         }
     }
 }
@@ -317,6 +342,9 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
         let name = path.0.join("::");
         match item {
             ASTMember::Function(function) => {
+                if function.body.is_none() {
+                    continue;
+                }
                 let fn_type: inkwell::types::FunctionType<'_> =
                     codegen.get_type(&function.return_type).fn_type(
                         function
@@ -337,7 +365,10 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
     for (path, item) in &compiler.sources {
         let name = path.0.join("::");
         match item {
-            ASTMember::Function(_) => {
+            ASTMember::Function(function) => {
+                if function.body.is_none() {
+                    continue;
+                }
                 codegen.jit_compile_function(name, compiler.compile_function(path.clone()));
             }
             ASTMember::Struct(structure) => {

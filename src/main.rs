@@ -1,4 +1,7 @@
-use crate::compile::{Compiler, ItemPath};
+use crate::{
+    ast::{ASTFunction, ASTFunctionParameter, ASTMember, DataType, ParamType},
+    compile::{Compiler, ItemPath},
+};
 
 mod ast;
 mod codegen;
@@ -11,5 +14,15 @@ fn main() {
     let sources = ast::parse_sources(&mut tokens).unwrap();
     let mut compiler = Compiler::new();
     compiler.add_sources(sources);
+    let print_function = ASTMember::Function(ASTFunction {
+        body: None,
+        name: ItemPath::single("print"),
+        return_type: DataType::void(),
+        parameters: vec![ASTFunctionParameter {
+            name: "value".to_string(),
+            data_type: DataType::make_simple(ItemPath::single("i64")),
+        }],
+    });
+    compiler.add_sources(vec![print_function]);
     codegen::testrun(&compiler).unwrap();
 }

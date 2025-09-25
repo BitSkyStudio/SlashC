@@ -31,7 +31,7 @@ pub fn parse_param_type(tokens: &mut TokenList) -> Result<ParamType> {
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct DataType {
     pub param_type: ParamType,
-    pub reference: Option<DataTypeReference>,
+    pub references: Vec<Mutability>,
 }
 impl DataType {
     pub fn make_simple(path: ItemPath) -> Self {
@@ -40,7 +40,7 @@ impl DataType {
                 path,
                 template_args: Vec::new(),
             },
-            reference: None,
+            references: Vec::new(),
         }
     }
     pub fn void() -> Self {
@@ -48,17 +48,17 @@ impl DataType {
     }
 }
 pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
+    let mut references = Vec::new();
+    while tokens.is_expected_and_take(Token::Reference)?.0 {
+        references.push(match tokens.is_expected_and_take(Token::Mut)?.0 {
+            true => Mutability::Mutable,
+            false => Mutability::Immutable,
+        });
+    }
     Ok(DataType {
-        reference: match tokens.is_expected_and_take(Token::Reference)?.0 {
-            true => todo!(),
-            false => None,
-        },
+        references,
         param_type: parse_param_type(tokens)?,
     })
-}
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct DataTypeReference {
-    pub mutability: Mutability,
 }
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Mutability {
@@ -70,7 +70,7 @@ pub struct ASTFunction {
     pub name: ItemPath,
     pub return_type: DataType,
     pub parameters: Vec<ASTFunctionParameter>,
-    pub body: ASTBlock,
+    pub body: Option<ASTBlock>,
 }
 pub fn parse_function(tokens: &mut TokenList, base_path: ItemPath) -> Result<ASTFunction> {
     Ok(ASTFunction {
@@ -93,7 +93,7 @@ pub fn parse_function(tokens: &mut TokenList, base_path: ItemPath) -> Result<AST
             }
             parameters
         },
-        body: parse_block(tokens)?,
+        body: Some(parse_block(tokens)?),
     })
 }
 #[derive(Debug)]
@@ -138,6 +138,10 @@ pub fn parse_block(tokens: &mut TokenList) -> Result<ASTBlock> {
             match tokens.peek()?.0.clone() {
                 Token::Assign(operator) => {
                     tokens.take().unwrap();
+                    let mut reference_count = 0;
+                    while tokens.is_expected_and_take(Token::Reference)?.0 {
+                        reference_count += 1;
+                    }
                     let right = parse_expression(tokens)?;
                     tokens.expect_token(Token::Semicolon)?;
                     statements.push(ASTStatement::Assign {
@@ -150,6 +154,7 @@ pub fn parse_block(tokens: &mut TokenList) -> Result<ASTBlock> {
                             None => right,
                         },
                         left,
+                        reference_count,
                     });
                 }
                 _ => {
@@ -179,6 +184,7 @@ pub enum ASTStatement {
     Assign {
         left: ASTExpression,
         right: ASTExpression,
+        reference_count: u32,
     },
     InitializeAssign {
         data_type: DataType,
@@ -296,6 +302,17 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
         }
         token => return Err(anyhow::anyhow!("invalid token {token:?}")),
     };
+    match tokens.peek()?.0 {
+        Token::Dot => {
+            tokens.take().unwrap();
+            let member = tokens.expect_identifier()?.0;
+            expression = ASTExpression::MemberAccess {
+                expression: Box::new(expression),
+                member,
+            };
+        }
+        _ => {}
+    }
     Ok(match unary_operator {
         Some(operator) => ASTExpression::UnaryOperator {
             expression: Box::new(expression),
@@ -331,6 +348,10 @@ pub enum ASTExpression {
     WhileLoop {
         condition: Box<ASTExpression>,
         body: Box<ASTBlock>,
+    },
+    MemberAccess {
+        expression: Box<ASTExpression>,
+        member: String,
     },
 }
 impl ASTExpression {
