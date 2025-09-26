@@ -299,14 +299,22 @@ impl<'ctx> CodeGen<'ctx> {
                 struct_type,
                 is_reference,
             } => Some(if *is_reference {
+                let index_type = self.context.i32_type();
                 unsafe {
                     self.builder
                         .build_gep(
-                            self.get_type(struct_type),
+                            self.get_type(&{
+                                let mut data_type = struct_type.clone();
+                                data_type.references.clear();
+                                data_type
+                            }),
                             Self::build_statement(self, &parent, variables)
                                 .unwrap()
                                 .into_pointer_value(),
-                            &[self.context.i64_type().const_int(*member as u64, false)],
+                            &[
+                                index_type.const_int(0, false),
+                                index_type.const_int(*member as u64, false),
+                            ],
                             "gep",
                         )
                         .unwrap()
@@ -399,12 +407,6 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
     for (path, item) in &compiler.sources {
         let name = path.0.join("::");
         match item {
-            ASTMember::Function(function) => {
-                if function.body.is_none() {
-                    continue;
-                }
-                codegen.jit_compile_function(name, compiler.compile_function(path.clone()));
-            }
             ASTMember::Struct(structure) => {
                 codegen.context.get_struct_type(&name).unwrap().set_body(
                     structure
@@ -416,6 +418,19 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
                     false,
                 );
             }
+            _ => {}
+        }
+    }
+    for (path, item) in &compiler.sources {
+        let name = path.0.join("::");
+        match item {
+            ASTMember::Function(function) => {
+                if function.body.is_none() {
+                    continue;
+                }
+                codegen.jit_compile_function(name, compiler.compile_function(path.clone()));
+            }
+            _ => {}
         }
     }
 

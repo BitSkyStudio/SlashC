@@ -237,7 +237,7 @@ impl CompiledBlock {
                 compiler,
             ),
             ASTExpression::VariableAccess { variable } => {
-                let variable = context.get_variable_id(&variable).unwrap();
+                let variable = context.get_variable_id(&variable).expect(variable.as_str());
                 CompiledStatement::GetVariable {
                     variable,
                     data_type: context.get_variable_type(variable).clone(),
