@@ -286,19 +286,32 @@ impl<'ctx> CodeGen<'ctx> {
             CompiledStatement::MemberAccess {
                 parent,
                 member,
-                returned_type,
-            } => Some(unsafe {
+                struct_type,
+                is_reference,
+            } => Some(if *is_reference {
+                unsafe {
+                    self.builder
+                        .build_gep(
+                            self.get_type(struct_type),
+                            Self::build_statement(self, &parent, variables)
+                                .unwrap()
+                                .into_pointer_value(),
+                            &[self.context.i64_type().const_int(*member as u64, false)],
+                            "gep",
+                        )
+                        .unwrap()
+                        .as_basic_value_enum()
+                }
+            } else {
                 self.builder
-                    .build_gep(
-                        self.get_type(returned_type), //todo: maybe incorect?
+                    .build_extract_value(
                         Self::build_statement(self, &parent, variables)
                             .unwrap()
-                            .into_pointer_value(),
-                        &[self.context.i64_type().const_int(*member as u64, false)],
-                        "gep",
+                            .into_struct_value(),
+                        *member,
+                        "extractval",
                     )
                     .unwrap()
-                    .as_basic_value_enum()
             }),
             CompiledStatement::Dereference {
                 parent,

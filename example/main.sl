@@ -1,9 +1,10 @@
 i64 main(){
     i64 a = 5;
     i64 b = 3;
-    //Counter cnt = 0;
-    //cnt.count = 10;
-    //print(a + b + cnt.count);
+    Counter cnt = 0;
+    cnt.count = 20;
+    cnt.count2 = 10;
+    print(cnt.count * cnt.count2);
     print(foo(a+b));
     print(-if !(a >= b){
         10
@@ -31,4 +32,5 @@ i64 sum(i64 n){
 
 struct Counter{
     i64 count;
+    i64 count2;
 }

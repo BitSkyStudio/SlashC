@@ -263,7 +263,7 @@ impl CompiledBlock {
                 body: Box::new(Self::compile(&body, context, compiler)),
             },
             ASTExpression::MemberAccess { expression, member } => {
-                let parent = Self::compile_expression(&expression, context, compiler);
+                let mut parent = Self::compile_expression(&expression, context, compiler);
                 let member = match compiler
                     .sources
                     .get(&parent.get_return_type(compiler).param_type.path)
@@ -277,10 +277,18 @@ impl CompiledBlock {
                         .find(|(_, field)| field.name == *member),
                 }
                 .unwrap();
+                let parent_type = parent.get_return_type(compiler);
+                let is_reference = parent_type.references.len() > 0;
+                if is_reference {
+                    parent =
+                        parent.deref_n_times(parent_type.references.len() as u32 - 1, compiler);
+                }
+                println!("{:?}", parent.get_return_type(compiler));
                 CompiledStatement::MemberAccess {
+                    struct_type: parent.get_return_type(compiler),
                     parent: Box::new(parent),
                     member: member.0 as u32,
-                    returned_type: member.1.data_type.clone(),
+                    is_reference,
                 }
             }
         }
@@ -427,7 +435,8 @@ pub enum CompiledStatement {
     MemberAccess {
         parent: Box<CompiledStatement>,
         member: u32,
-        returned_type: DataType,
+        struct_type: DataType,
+        is_reference: bool,
     },
     Dereference {
         parent: Box<CompiledStatement>,
@@ -477,7 +486,21 @@ impl CompiledStatement {
             }
             CompiledStatement::IfConditional { returned_type, .. } => returned_type.clone(),
             CompiledStatement::WhileLoop { condition, body } => DataType::void(),
-            CompiledStatement::MemberAccess { returned_type, .. } => returned_type.clone(),
+            CompiledStatement::MemberAccess {
+                struct_type,
+                member,
+                is_reference,
+                ..
+            } => match compiler.sources.get(&struct_type.param_type.path).unwrap() {
+                ASTMember::Function(astfunction) => unreachable!(),
+                ASTMember::Struct(aststruct) => {
+                    let mut field_type = aststruct.fields[*member as usize].data_type.clone();
+                    if *is_reference {
+                        field_type.references.insert(0, Mutability::Immutable);
+                    }
+                    field_type
+                }
+            },
             CompiledStatement::Dereference { returned_type, .. } => returned_type.clone(),
         }
     }
