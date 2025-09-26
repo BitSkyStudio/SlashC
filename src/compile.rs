@@ -17,9 +17,9 @@ impl ItemPath {
     pub fn single(value: impl ToString) -> Self {
         ItemPath::new().extend(value.to_string())
     }
-    pub fn extend(&self, value: String) -> Self {
+    pub fn extend(&self, value: impl ToString) -> Self {
         let mut new_path = self.clone();
-        new_path.0.push(value);
+        new_path.0.push(value.to_string());
         new_path
     }
 }
@@ -283,13 +283,30 @@ impl CompiledBlock {
                     parent =
                         parent.deref_n_times(parent_type.references.len() as u32 - 1, compiler);
                 }
-                println!("{:?}", parent.get_return_type(compiler));
                 CompiledStatement::MemberAccess {
                     struct_type: parent.get_return_type(compiler),
                     parent: Box::new(parent),
                     member: member.0 as u32,
                     is_reference,
                 }
+            }
+            ASTExpression::MethodCall {
+                expression,
+                method,
+                parameters,
+            } => {
+                let compiled_expression = Self::compile_expression(&expression, context, compiler);
+                let target_method = compiled_expression
+                    .get_return_type(compiler)
+                    .param_type
+                    .path
+                    .extend(method);
+                let mut method_params = Vec::new();
+                method_params.push(compiled_expression);
+                for parameter in parameters {
+                    method_params.push(Self::compile_expression(parameter, context, compiler));
+                }
+                Self::make_function_call(target_method, method_params, context, compiler)
             }
         }
     }
@@ -357,7 +374,11 @@ impl CompiledBlock {
                 }
             }
         }
-        let ast_function = match compiler.sources.get(&function).unwrap() {
+        let ast_function = match compiler
+            .sources
+            .get(&function)
+            .expect(&function.0.join("::"))
+        {
             ASTMember::Function(astfunction) => astfunction,
             ASTMember::Struct(aststruct) => unreachable!(),
         };

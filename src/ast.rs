@@ -72,24 +72,38 @@ pub struct ASTFunction {
     pub parameters: Vec<ASTFunctionParameter>,
     pub body: Option<ASTBlock>,
 }
-pub fn parse_function(tokens: &mut TokenList, base_path: ItemPath) -> Result<ASTFunction> {
+pub fn parse_function(
+    tokens: &mut TokenList,
+    base_path: ItemPath,
+    this_type: Option<ItemPath>,
+) -> Result<ASTFunction> {
     Ok(ASTFunction {
         return_type: parse_data_type(tokens)?,
         name: base_path.extend(tokens.expect_identifier()?.0),
         parameters: {
             let mut parameters = Vec::new();
             tokens.expect_token(Token::LParen)?;
+            let mut valid_this = this_type.is_some();
             loop {
                 if tokens.is_expected_and_take(Token::RParen)?.0 {
                     break;
                 }
-                let data_type = parse_data_type(tokens)?;
-                let name = tokens.expect_identifier()?.0;
-                parameters.push(ASTFunctionParameter { name, data_type });
+                let mut data_type = parse_data_type(tokens)?;
+                if valid_this && data_type.param_type.path == ItemPath::single("this") {
+                    data_type.param_type.path = this_type.clone().unwrap();
+                    parameters.push(ASTFunctionParameter {
+                        name: "this".to_string(),
+                        data_type,
+                    });
+                } else {
+                    let name = tokens.expect_identifier()?.0;
+                    parameters.push(ASTFunctionParameter { name, data_type });
+                }
                 if !tokens.is_expected_and_take(Token::Comma)?.0 {
                     tokens.expect_token(Token::RParen)?;
                     break;
                 }
+                valid_this = false;
             }
             parameters
         },
@@ -251,6 +265,10 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
         Token::Number(value) => ASTExpression::Literal(ASTLiteral::Float(value)),
         Token::Bool(value) => ASTExpression::Literal(ASTLiteral::Bool(value)),
         Token::Identifier(identifier) => {
+            let mut function = ItemPath::single(&identifier);
+            while tokens.is_expected_and_take(Token::DoubleColon)?.0 {
+                function = function.extend(tokens.expect_identifier()?.0.as_str());
+            }
             if tokens.is_expected_and_take(Token::LParen)?.0 {
                 let mut parameters = Vec::new();
                 while match tokens.peek()?.0 {
@@ -264,7 +282,7 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
                 }
                 tokens.expect_token(Token::RParen)?;
                 ASTExpression::FunctionCall {
-                    function: ItemPath::single(identifier),
+                    function,
                     parameters,
                 }
             } else {
@@ -306,10 +324,29 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
         Token::Dot => {
             tokens.take().unwrap();
             let member = tokens.expect_identifier()?.0;
-            expression = ASTExpression::MemberAccess {
-                expression: Box::new(expression),
-                member,
-            };
+            if tokens.is_expected_and_take(Token::LParen)?.0 {
+                let mut parameters = Vec::new();
+                while match tokens.peek()?.0 {
+                    Token::RParen => false,
+                    _ => true,
+                } {
+                    parameters.push(parse_expression(tokens)?);
+                    if !tokens.is_expected_and_take(Token::Comma)?.0 {
+                        break;
+                    }
+                }
+                tokens.expect_token(Token::RParen)?;
+                expression = ASTExpression::MethodCall {
+                    expression: Box::new(expression),
+                    method: member,
+                    parameters,
+                };
+            } else {
+                expression = ASTExpression::MemberAccess {
+                    expression: Box::new(expression),
+                    member,
+                };
+            }
         }
         _ => {}
     }
@@ -353,6 +390,11 @@ pub enum ASTExpression {
         expression: Box<ASTExpression>,
         member: String,
     },
+    MethodCall {
+        expression: Box<ASTExpression>,
+        method: String,
+        parameters: Vec<ASTExpression>,
+    },
 }
 impl ASTExpression {
     pub fn no_semicolon_required(&self) -> bool {
@@ -380,19 +422,32 @@ pub struct ASTStructField {
     pub data_type: DataType,
 }
 
-pub fn parse_struct(tokens: &mut TokenList, base_path: ItemPath) -> Result<ASTStruct> {
+pub fn parse_struct(tokens: &mut TokenList, base_path: ItemPath) -> Result<Vec<ASTMember>> {
+    let mut ast_members = Vec::new();
     let name = base_path.extend(tokens.expect_identifier()?.0);
     tokens.expect_token(Token::LBrace)?;
     let mut fields = Vec::new();
     while !tokens.is_expected_and_take(Token::RBrace)?.0 {
-        let data_type = parse_data_type(tokens)?;
-        let name = tokens.expect_identifier()?.0;
-        tokens.expect_token(Token::Semicolon)?;
-        fields.push(ASTStructField { name, data_type });
+        match tokens.try_parse(|tokens| {
+            let data_type = parse_data_type(tokens)?;
+            let name = tokens.expect_identifier()?.0;
+            tokens.expect_token(Token::Semicolon)?;
+            Ok(ASTStructField { name, data_type })
+        }) {
+            Some(field) => fields.push(field),
+            None => {
+                ast_members.push(ASTMember::Function(parse_function(
+                    tokens,
+                    name.clone(),
+                    Some(name.clone()),
+                )?));
+            }
+        }
     }
-    Ok(ASTStruct { name, fields })
+    ast_members.push(ASTMember::Struct(ASTStruct { name, fields }));
+    Ok(ast_members)
 }
-
+#[derive(Debug)]
 pub enum ASTMember {
     Function(ASTFunction),
     Struct(ASTStruct),
@@ -409,11 +464,12 @@ pub fn parse_sources(tokens: &mut TokenList) -> Result<Vec<ASTMember>> {
     let mut members = Vec::new();
     while !tokens.is_empty() {
         if tokens.is_expected_and_take(Token::Struct)?.0 {
-            members.push(ASTMember::Struct(parse_struct(tokens, ItemPath::new())?));
+            members.extend(parse_struct(tokens, ItemPath::new())?);
         } else {
             members.push(ASTMember::Function(parse_function(
                 tokens,
                 ItemPath::new(),
+                None,
             )?));
         }
     }

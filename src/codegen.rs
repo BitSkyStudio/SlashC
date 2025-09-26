@@ -4,7 +4,7 @@ use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::module::Module;
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{AnyValue, BasicValue, BasicValueEnum, FunctionValue, PointerValue};
-use inkwell::{IntPredicate, OptimizationLevel};
+use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
 use std::error::Error;
 
@@ -31,6 +31,12 @@ impl<'ctx> CodeGen<'ctx> {
         self.fn_value_opt.unwrap()
     }
     fn get_type(&self, path: &DataType) -> BasicTypeEnum<'ctx> {
+        if path.references.len() > 0 {
+            return self
+                .context
+                .ptr_type(AddressSpace::default())
+                .as_basic_type_enum();
+        }
         let path = path.param_type.path.0.join("::");
         match path.as_str() {
             "i64" => self.context.i64_type().as_basic_type_enum(),
@@ -39,7 +45,7 @@ impl<'ctx> CodeGen<'ctx> {
             path => self
                 .context
                 .get_struct_type(path)
-                .unwrap()
+                .expect(path)
                 .as_basic_type_enum(),
         }
     }
@@ -67,7 +73,11 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         let returned = self.build_block(&compiled_function.block, &variables);
-        self.builder.build_return(Some(&returned.unwrap())).unwrap();
+        let returned_dyn: Option<&dyn BasicValue> = match &returned {
+            Some(r) => Some(r),
+            None => None,
+        };
+        self.builder.build_return(returned_dyn).unwrap();
     }
     fn build_block<'a>(
         &'a self,
@@ -354,25 +364,36 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
     for (path, item) in &compiler.sources {
         let name = path.0.join("::");
         match item {
+            ASTMember::Struct(structure) => {
+                codegen.context.opaque_struct_type(&name);
+            }
+            _ => {}
+        }
+    }
+    for (path, item) in &compiler.sources {
+        let name = path.0.join("::");
+        match item {
             ASTMember::Function(function) => {
                 if function.body.is_none() {
                     continue;
                 }
+                let param_types = function
+                    .parameters
+                    .iter()
+                    .map(|param| codegen.get_type(&param.data_type).into())
+                    .collect::<Vec<_>>();
                 let fn_type: inkwell::types::FunctionType<'_> =
-                    codegen.get_type(&function.return_type).fn_type(
-                        function
-                            .parameters
-                            .iter()
-                            .map(|param| codegen.get_type(&param.data_type).into())
-                            .collect::<Vec<_>>()
-                            .as_slice(),
-                        false,
-                    );
+                    if function.return_type.param_type.path.0 == vec!["void".to_string()] {
+                        context.void_type().fn_type(param_types.as_slice(), false)
+                    } else {
+                        codegen
+                            .get_type(&function.return_type)
+                            .fn_type(param_types.as_slice(), false)
+                    };
+
                 codegen.module.add_function(&name, fn_type, None);
             }
-            ASTMember::Struct(structure) => {
-                codegen.context.opaque_struct_type(&name);
-            }
+            _ => {}
         }
     }
     for (path, item) in &compiler.sources {
