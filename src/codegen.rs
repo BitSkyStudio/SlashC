@@ -345,6 +345,25 @@ impl<'ctx> CodeGen<'ctx> {
                     )
                     .unwrap(),
             ),
+            CompiledStatement::Initialize { data_type, fields } => {
+                let mut zero = self
+                    .get_type(&DataType::make_simple(data_type.clone()))
+                    .into_struct_type()
+                    .const_zero();
+                for (i, f) in fields.iter().enumerate() {
+                    zero = self
+                        .builder
+                        .build_insert_value(
+                            zero,
+                            Self::build_statement(self, f, variables).unwrap(),
+                            i as u32,
+                            "fieldinsert",
+                        )
+                        .unwrap()
+                        .into_struct_value();
+                }
+                Some(zero.as_basic_value_enum())
+            }
         }
     }
 }

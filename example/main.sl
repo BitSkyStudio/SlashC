@@ -1,9 +1,7 @@
 i64 main(){
     i64 a = 5;
     i64 b = 3;
-    Average avg = 0;
-    avg.average = 0;
-    avg.count = 0;
+    Average avg = Average(foo(3), 2);
     avg.add(10);
     avg.add(15);
     avg.add(30);

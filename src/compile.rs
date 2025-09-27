@@ -374,31 +374,47 @@ impl CompiledBlock {
                 }
             }
         }
-        let ast_function = match compiler
+        match compiler
             .sources
             .get(&function)
             .expect(&function.0.join("::"))
         {
-            ASTMember::Function(astfunction) => astfunction,
-            ASTMember::Struct(aststruct) => unreachable!(),
-        };
-        CompiledStatement::FunctionCall {
-            path: function,
-            arguments: parameters
-                .into_iter()
-                .enumerate()
-                .map(|(i, parameter)| {
-                    let target_reference_count =
-                        ast_function.parameters[i].data_type.references.len() as u32;
-                    let param_reference_count =
-                        parameter.get_return_type(compiler).references.len() as u32;
-                    if target_reference_count > param_reference_count {
-                        panic!();
-                    }
-                    parameter
-                        .deref_n_times(param_reference_count - target_reference_count, compiler)
-                })
-                .collect(),
+            ASTMember::Function(ast_function) => CompiledStatement::FunctionCall {
+                path: function,
+                arguments: parameters
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, parameter)| {
+                        let target_reference_count =
+                            ast_function.parameters[i].data_type.references.len() as u32;
+                        let param_reference_count =
+                            parameter.get_return_type(compiler).references.len() as u32;
+                        if target_reference_count > param_reference_count {
+                            panic!();
+                        }
+                        parameter
+                            .deref_n_times(param_reference_count - target_reference_count, compiler)
+                    })
+                    .collect(),
+            },
+            ASTMember::Struct(ast_struct) => CompiledStatement::Initialize {
+                data_type: function,
+                fields: parameters
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, parameter)| {
+                        let target_reference_count =
+                            ast_struct.fields[i].data_type.references.len() as u32;
+                        let param_reference_count =
+                            parameter.get_return_type(compiler).references.len() as u32;
+                        if target_reference_count > param_reference_count {
+                            panic!();
+                        }
+                        parameter
+                            .deref_n_times(param_reference_count - target_reference_count, compiler)
+                    })
+                    .collect(),
+            },
         }
     }
     pub fn get_return_type(
@@ -442,6 +458,10 @@ pub enum CompiledStatement {
     FunctionCall {
         path: ItemPath,
         arguments: Vec<CompiledStatement>,
+    },
+    Initialize {
+        data_type: ItemPath,
+        fields: Vec<CompiledStatement>,
     },
     IfConditional {
         condition: Box<CompiledStatement>,
@@ -523,6 +543,9 @@ impl CompiledStatement {
                 }
             },
             CompiledStatement::Dereference { returned_type, .. } => returned_type.clone(),
+            CompiledStatement::Initialize { data_type, fields } => {
+                DataType::make_simple(data_type.clone())
+            }
         }
     }
     pub fn deref_n_times(mut self, n: u32, compiler: &Compiler) -> CompiledStatement {
