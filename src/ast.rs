@@ -9,12 +9,20 @@ pub fn parse_item_path(tokens: &mut TokenList) -> Result<ItemPath> {
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct ParamType {
+pub struct ParameteredPath {
     pub path: ItemPath,
-    pub template_args: Vec<ParamType>,
+    pub template_args: Vec<ParameteredPath>,
 }
-pub fn parse_param_type(tokens: &mut TokenList) -> Result<ParamType> {
-    Ok(ParamType {
+impl ParameteredPath {
+    pub fn new(path: ItemPath) -> ParameteredPath {
+        ParameteredPath {
+            path,
+            template_args: Vec::new(),
+        }
+    }
+}
+pub fn parse_param_type(tokens: &mut TokenList) -> Result<ParameteredPath> {
+    Ok(ParameteredPath {
         path: parse_item_path(tokens)?,
         template_args: {
             let mut template_args = Vec::new();
@@ -29,36 +37,49 @@ pub fn parse_param_type(tokens: &mut TokenList) -> Result<ParamType> {
     })
 }
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct DataType {
-    pub param_type: ParamType,
-    pub references: Vec<Mutability>,
+pub enum DataType {
+    Simple(ParameteredPath),
+    Reference(Mutability, Box<DataType>),
+    Pointer(Mutability, bool, Box<DataType>),
+    Lock(Box<DataType>),
 }
 impl DataType {
-    pub fn make_simple(path: ItemPath) -> Self {
-        DataType {
-            param_type: ParamType {
-                path,
-                template_args: Vec::new(),
-            },
-            references: Vec::new(),
+    pub fn void() -> Self {
+        DataType::Simple(ParameteredPath::new(ItemPath::single("void")))
+    }
+    pub fn get_base_path(&self) -> &ParameteredPath {
+        match self {
+            DataType::Simple(parametered_path) => parametered_path,
+            DataType::Reference(_, data_type) => data_type.get_base_path(),
+            DataType::Pointer(_, _, data_type) => data_type.get_base_path(),
+            DataType::Lock(data_type) => data_type.get_base_path(),
         }
     }
-    pub fn void() -> Self {
-        DataType::make_simple(ItemPath::single("void"))
+    pub fn get_base_path_mut(&mut self) -> &mut ParameteredPath {
+        match self {
+            DataType::Simple(parametered_path) => parametered_path,
+            DataType::Reference(_, data_type) => data_type.get_base_path_mut(),
+            DataType::Pointer(_, _, data_type) => data_type.get_base_path_mut(),
+            DataType::Lock(data_type) => data_type.get_base_path_mut(),
+        }
     }
 }
 pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
-    let mut references = Vec::new();
-    while tokens.is_expected_and_take(Token::Reference)?.0 {
-        references.push(match tokens.is_expected_and_take(Token::Mut)?.0 {
-            true => Mutability::Mutable,
-            false => Mutability::Immutable,
-        });
+    match tokens.peek()?.0 {
+        Token::Reference => {
+            tokens.take();
+            let mutable = tokens.is_expected_and_take(Token::Mut)?.0;
+            Ok(DataType::Reference(
+                if mutable {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                },
+                Box::new(parse_data_type(tokens)?),
+            ))
+        }
+        _ => Ok(DataType::Simple(parse_param_type(tokens)?)),
     }
-    Ok(DataType {
-        references,
-        param_type: parse_param_type(tokens)?,
-    })
 }
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Mutability {
@@ -75,7 +96,7 @@ pub struct ASTFunction {
 pub fn parse_function(
     tokens: &mut TokenList,
     base_path: ItemPath,
-    this_type: Option<ItemPath>,
+    this_type: Option<ParameteredPath>,
 ) -> Result<ASTFunction> {
     Ok(ASTFunction {
         return_type: parse_data_type(tokens)?,
@@ -89,8 +110,8 @@ pub fn parse_function(
                     break;
                 }
                 let mut data_type = parse_data_type(tokens)?;
-                if valid_this && data_type.param_type.path == ItemPath::single("this") {
-                    data_type.param_type.path = this_type.clone().unwrap();
+                if valid_this && data_type.get_base_path().path.0 == vec!["this".to_string()] {
+                    *data_type.get_base_path_mut() = this_type.clone().unwrap();
                     parameters.push(ASTFunctionParameter {
                         name: "this".to_string(),
                         data_type,
@@ -282,7 +303,7 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
                 }
                 tokens.expect_token(Token::RParen)?;
                 ASTExpression::FunctionCall {
-                    function,
+                    function: ParameteredPath::new(function),
                     parameters,
                 }
             } else {
@@ -371,7 +392,7 @@ pub enum ASTExpression {
         operator: UnaryOperator,
     },
     FunctionCall {
-        function: ItemPath,
+        function: ParameteredPath,
         parameters: Vec<ASTExpression>,
     },
     VariableAccess {
@@ -439,7 +460,7 @@ pub fn parse_struct(tokens: &mut TokenList, base_path: ItemPath) -> Result<Vec<A
                 ast_members.push(ASTMember::Function(parse_function(
                     tokens,
                     name.clone(),
-                    Some(name.clone()),
+                    Some(ParameteredPath::new(name.clone())),
                 )?));
             }
         }

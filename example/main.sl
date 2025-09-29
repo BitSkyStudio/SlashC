@@ -37,7 +37,7 @@ i64 sum(i64 n){
 struct Average{
     i64 average;
     i64 count;
-    void add(&mut this, i64 value){
+    void add(&this, i64 value){
         this.average += value;
         this.count += 1;
     }

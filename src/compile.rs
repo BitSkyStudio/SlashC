@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ast::{
         ASTBlock, ASTExpression, ASTFunctionParameter, ASTLiteral, ASTMember, ASTStatement,
-        DataType, Mutability,
+        DataType, Mutability, ParameteredPath,
     },
     lexer::{Comparison, Operator, UnaryOperator},
 };
@@ -132,20 +132,25 @@ impl CompiledBlock {
                     right,
                     reference_count,
                 } => {
+                    //todo: handle reference count
                     let left = Self::compile_expression(left, context, compiler);
                     let right = Self::compile_expression(right, context, compiler);
-                    let left_deref_count = left.get_return_type(compiler).references.len() as i32
-                        - *reference_count as i32
-                        - 1;
-                    let right_deref_count = right.get_return_type(compiler).references.len() as i32
-                        - *reference_count as i32;
-                    if left_deref_count < 0 || right_deref_count < 0 {
-                        panic!();
-                    }
+
+                    let right_type =
+                        DataType::Simple(right.get_return_type(compiler).get_base_path().clone());
 
                     statements.push(CompiledStatement::Store {
-                        target: Box::new(left.deref_n_times(left_deref_count as u32, compiler)),
-                        value: Box::new(right.deref_n_times(right_deref_count as u32, compiler)),
+                        target: Box::new(
+                            left.implicit_cast_to(
+                                &DataType::Reference(
+                                    Mutability::Immutable,
+                                    Box::new(right_type.clone()),
+                                ),
+                                compiler,
+                            )
+                            .unwrap(),
+                        ),
+                        value: Box::new(right.implicit_cast_to(&right_type, compiler).unwrap()),
                     });
                 }
                 ASTStatement::InitializeAssign {
@@ -199,10 +204,12 @@ impl CompiledBlock {
                 let left = Self::compile_expression(left, context, compiler);
                 let right = Self::compile_expression(right, context, compiler);
                 Self::make_function_call(
-                    left.get_return_type(compiler)
-                        .param_type
-                        .path
-                        .extend(format!("operator_{}", operator.get_name())),
+                    ParameteredPath::new(
+                        left.get_return_type(compiler)
+                            .get_base_path()
+                            .path
+                            .extend(format!("operator_{}", operator.get_name())),
+                    ),
                     vec![left, right],
                     context,
                     compiler,
@@ -214,11 +221,13 @@ impl CompiledBlock {
             } => {
                 let expression = Self::compile_expression(expression, context, compiler);
                 Self::make_function_call(
-                    expression
-                        .get_return_type(compiler)
-                        .param_type
-                        .path
-                        .extend(format!("operator_{}", operator.get_name())),
+                    ParameteredPath::new(
+                        expression
+                            .get_return_type(compiler)
+                            .get_base_path()
+                            .path
+                            .extend(format!("operator_{}", operator.get_name())),
+                    ),
                     vec![expression],
                     context,
                     compiler,
@@ -266,7 +275,7 @@ impl CompiledBlock {
                 let mut parent = Self::compile_expression(&expression, context, compiler);
                 let member = match compiler
                     .sources
-                    .get(&parent.get_return_type(compiler).param_type.path)
+                    .get(&parent.get_return_type(compiler).get_base_path().path)
                     .unwrap()
                 {
                     ASTMember::Function(astfunction) => unreachable!(),
@@ -278,16 +287,31 @@ impl CompiledBlock {
                 }
                 .unwrap();
                 let parent_type = parent.get_return_type(compiler);
-                let is_reference = parent_type.references.len() > 0;
-                if is_reference {
-                    parent =
-                        parent.deref_n_times(parent_type.references.len() as u32 - 1, compiler);
-                }
-                CompiledStatement::MemberAccess {
-                    struct_type: parent.get_return_type(compiler),
-                    parent: Box::new(parent),
-                    member: member.0 as u32,
-                    is_reference,
+                match parent_type {
+                    DataType::Simple(path) => CompiledStatement::MemberAccess {
+                        struct_type: parent.get_return_type(compiler),
+                        parent: Box::new(parent),
+                        member: member.0 as u32,
+                        is_reference: false,
+                    },
+                    _ => CompiledStatement::MemberAccess {
+                        struct_type: parent.get_return_type(compiler),
+                        parent: Box::new(
+                            parent
+                                .implicit_cast_to(
+                                    &DataType::Reference(
+                                        Mutability::Immutable,
+                                        Box::new(DataType::Simple(
+                                            parent_type.get_base_path().clone(),
+                                        )),
+                                    ),
+                                    compiler,
+                                )
+                                .unwrap(),
+                        ),
+                        member: member.0 as u32,
+                        is_reference: true,
+                    },
                 }
             }
             ASTExpression::MethodCall {
@@ -298,7 +322,7 @@ impl CompiledBlock {
                 let compiled_expression = Self::compile_expression(&expression, context, compiler);
                 let target_method = compiled_expression
                     .get_return_type(compiler)
-                    .param_type
+                    .get_base_path()
                     .path
                     .extend(method);
                 let mut method_params = Vec::new();
@@ -306,17 +330,22 @@ impl CompiledBlock {
                 for parameter in parameters {
                     method_params.push(Self::compile_expression(parameter, context, compiler));
                 }
-                Self::make_function_call(target_method, method_params, context, compiler)
+                Self::make_function_call(
+                    ParameteredPath::new(target_method),
+                    method_params,
+                    context,
+                    compiler,
+                )
             }
         }
     }
     pub fn make_function_call(
-        function: ItemPath,
+        function: ParameteredPath,
         mut parameters: Vec<CompiledStatement>,
         context: &FunctionCompileContext,
         compiler: &Compiler,
     ) -> CompiledStatement {
-        let name = function.0.join("::");
+        let name = function.path.0.join("::");
         for (base_int_type, number) in [("i64", true), ("bool", false)] {
             if name.starts_with(base_int_type)
                 && name[base_int_type.len()..].starts_with("::operator_")
@@ -351,12 +380,12 @@ impl CompiledBlock {
                     if op.get_name() == operator {
                         let right = parameters.pop().unwrap();
                         let left = parameters.pop().unwrap();
-                        let left_deref_cnt = left.get_return_type(compiler).references.len() as u32;
-                        let right_deref_cnt =
-                            right.get_return_type(compiler).references.len() as u32;
+                        let target_type = DataType::Simple(
+                            left.get_return_type(compiler).get_base_path().clone(),
+                        );
                         return CompiledStatement::IntegerOp {
-                            a: Box::new(left.deref_n_times(left_deref_cnt, compiler)),
-                            b: Box::new(right.deref_n_times(right_deref_cnt, compiler)),
+                            a: Box::new(left.implicit_cast_to(&target_type, compiler).unwrap()),
+                            b: Box::new(right.implicit_cast_to(&target_type, compiler).unwrap()),
                             op: *op,
                         };
                     }
@@ -364,10 +393,13 @@ impl CompiledBlock {
                 for op in unary_operators {
                     if op.get_name() == operator {
                         let expression = parameters.pop().unwrap();
-                        let expression_deref_count =
-                            expression.get_return_type(compiler).references.len() as u32;
+                        let target_type = DataType::Simple(
+                            expression.get_return_type(compiler).get_base_path().clone(),
+                        );
                         return CompiledStatement::IntegerUnaryOp {
-                            a: Box::new(expression.deref_n_times(expression_deref_count, compiler)),
+                            a: Box::new(
+                                expression.implicit_cast_to(&target_type, compiler).unwrap(),
+                            ),
                             op: *op,
                         };
                     }
@@ -376,8 +408,8 @@ impl CompiledBlock {
         }
         match compiler
             .sources
-            .get(&function)
-            .expect(&function.0.join("::"))
+            .get(&function.path)
+            .expect(&function.path.0.join("::"))
         {
             ASTMember::Function(ast_function) => CompiledStatement::FunctionCall {
                 path: function,
@@ -385,15 +417,9 @@ impl CompiledBlock {
                     .into_iter()
                     .enumerate()
                     .map(|(i, parameter)| {
-                        let target_reference_count =
-                            ast_function.parameters[i].data_type.references.len() as u32;
-                        let param_reference_count =
-                            parameter.get_return_type(compiler).references.len() as u32;
-                        if target_reference_count > param_reference_count {
-                            panic!();
-                        }
                         parameter
-                            .deref_n_times(param_reference_count - target_reference_count, compiler)
+                            .implicit_cast_to(&ast_function.parameters[i].data_type, compiler)
+                            .unwrap()
                     })
                     .collect(),
             },
@@ -403,15 +429,9 @@ impl CompiledBlock {
                     .into_iter()
                     .enumerate()
                     .map(|(i, parameter)| {
-                        let target_reference_count =
-                            ast_struct.fields[i].data_type.references.len() as u32;
-                        let param_reference_count =
-                            parameter.get_return_type(compiler).references.len() as u32;
-                        if target_reference_count > param_reference_count {
-                            panic!();
-                        }
                         parameter
-                            .deref_n_times(param_reference_count - target_reference_count, compiler)
+                            .implicit_cast_to(&ast_struct.fields[i].data_type, compiler)
+                            .unwrap()
                     })
                     .collect(),
             },
@@ -456,11 +476,11 @@ pub enum CompiledStatement {
         op: UnaryOperator,
     },
     FunctionCall {
-        path: ItemPath,
+        path: ParameteredPath,
         arguments: Vec<CompiledStatement>,
     },
     Initialize {
-        data_type: ItemPath,
+        data_type: ParameteredPath,
         fields: Vec<CompiledStatement>,
     },
     IfConditional {
@@ -488,16 +508,12 @@ impl CompiledStatement {
     pub fn get_return_type(&self, compiler: &Compiler) -> DataType {
         match self {
             CompiledStatement::IntegerLiteral { value, data_type } => {
-                DataType::make_simple(data_type.clone())
+                DataType::Simple(ParameteredPath::new(data_type.clone()))
             }
             CompiledStatement::GetVariable {
                 variable,
                 data_type,
-            } => {
-                let mut data_type = data_type.clone();
-                data_type.references.insert(0, Mutability::Immutable);
-                data_type
-            }
+            } => DataType::Reference(Mutability::Immutable, Box::new(data_type.clone())),
             CompiledStatement::Store { target, value } => DataType::void(),
             CompiledStatement::IntegerOp { a, b, op } => match op {
                 Operator::Plus
@@ -507,20 +523,14 @@ impl CompiledStatement {
                 | Operator::Modulo
                 | Operator::And
                 | Operator::Or
-                | Operator::Xor => {
-                    let mut returned_type = a.get_return_type(compiler);
-                    returned_type.references.clear();
-                    returned_type
+                | Operator::Xor => a.get_return_type(compiler),
+                Operator::Comparison(_) => {
+                    DataType::Simple(ParameteredPath::new(ItemPath::single("bool")))
                 }
-                Operator::Comparison(_) => DataType::make_simple(ItemPath::single("bool")),
             },
-            CompiledStatement::IntegerUnaryOp { a, op } => {
-                let mut returned_type = a.get_return_type(compiler);
-                returned_type.references.clear();
-                returned_type
-            }
+            CompiledStatement::IntegerUnaryOp { a, op } => a.get_return_type(compiler),
             CompiledStatement::FunctionCall { path, arguments } => {
-                match compiler.sources.get(path).unwrap() {
+                match compiler.sources.get(&path.path).unwrap() {
                     ASTMember::Function(function) => function.return_type.clone(),
                     _ => panic!(),
                 }
@@ -532,31 +542,51 @@ impl CompiledStatement {
                 member,
                 is_reference,
                 ..
-            } => match compiler.sources.get(&struct_type.param_type.path).unwrap() {
+            } => match compiler
+                .sources
+                .get(&struct_type.get_base_path().path)
+                .unwrap()
+            {
                 ASTMember::Function(astfunction) => unreachable!(),
                 ASTMember::Struct(aststruct) => {
                     let mut field_type = aststruct.fields[*member as usize].data_type.clone();
                     if *is_reference {
-                        field_type.references.insert(0, Mutability::Immutable);
+                        DataType::Reference(Mutability::Immutable, Box::new(field_type.clone()))
+                    } else {
+                        field_type
                     }
-                    field_type
                 }
             },
             CompiledStatement::Dereference { returned_type, .. } => returned_type.clone(),
             CompiledStatement::Initialize { data_type, fields } => {
-                DataType::make_simple(data_type.clone())
+                DataType::Simple(data_type.clone())
             }
         }
     }
-    pub fn deref_n_times(mut self, n: u32, compiler: &Compiler) -> CompiledStatement {
-        for _ in 0..n {
-            let mut new_type = self.get_return_type(compiler);
-            new_type.references.remove(0);
-            self = CompiledStatement::Dereference {
-                parent: Box::new(self),
-                returned_type: new_type,
-            };
+    pub fn implicit_cast_to(self, to: &DataType, compiler: &Compiler) -> Option<CompiledStatement> {
+        Self::implicit_cast_type_to(self.get_return_type(compiler), to, self)
+    }
+    pub fn implicit_cast_type_to(
+        from: DataType,
+        to: &DataType,
+        statement: CompiledStatement,
+    ) -> Option<CompiledStatement> {
+        println!("from: {:?} to: {:?}", from, to);
+        if from == *to {
+            return Some(statement);
         }
-        self
+        match from {
+            DataType::Simple(parametered_path) => None,
+            DataType::Reference(mutability, data_type) => {
+                Self::implicit_cast_type_to((*data_type).clone(), to, statement).map(|statement| {
+                    CompiledStatement::Dereference {
+                        parent: Box::new(statement),
+                        returned_type: (*data_type).clone(),
+                    }
+                })
+            }
+            DataType::Pointer(mutability, _, data_type) => todo!(),
+            DataType::Lock(data_type) => todo!(),
+        }
     }
 }

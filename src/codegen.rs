@@ -8,7 +8,7 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
 use std::error::Error;
 
-use crate::ast::{ASTFunction, ASTMember, DataType};
+use crate::ast::{ASTFunction, ASTMember, DataType, ParameteredPath};
 use crate::compile::{CompiledBlock, CompiledFunction, CompiledStatement, Compiler, ItemPath};
 use crate::lexer::{Comparison, Operator, UnaryOperator};
 
@@ -31,22 +31,26 @@ impl<'ctx> CodeGen<'ctx> {
         self.fn_value_opt.unwrap()
     }
     fn get_type(&self, path: &DataType) -> BasicTypeEnum<'ctx> {
-        if path.references.len() > 0 {
-            return self
+        match path {
+            DataType::Simple(parametered_path) => {
+                let path = parametered_path.path.0.join("::");
+                match path.as_str() {
+                    "i64" => self.context.i64_type().as_basic_type_enum(),
+                    "bool" => self.context.bool_type().as_basic_type_enum(),
+                    //todo: void
+                    path => self
+                        .context
+                        .get_struct_type(path)
+                        .expect(path)
+                        .as_basic_type_enum(),
+                }
+            }
+            DataType::Reference(mutability, data_type) => self
                 .context
                 .ptr_type(AddressSpace::default())
-                .as_basic_type_enum();
-        }
-        let path = path.param_type.path.0.join("::");
-        match path.as_str() {
-            "i64" => self.context.i64_type().as_basic_type_enum(),
-            "bool" => self.context.bool_type().as_basic_type_enum(),
-            //todo: void
-            path => self
-                .context
-                .get_struct_type(path)
-                .expect(path)
                 .as_basic_type_enum(),
+            DataType::Pointer(mutability, _, data_type) => todo!(),
+            DataType::Lock(data_type) => todo!(),
         }
     }
     fn jit_compile_function(&mut self, function_name: String, compiled_function: CompiledFunction) {
@@ -97,7 +101,7 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> Option<BasicValueEnum<'a>> {
         match statement {
             CompiledStatement::IntegerLiteral { value, data_type } => Some(
-                self.get_type(&DataType::make_simple(data_type.clone()))
+                self.get_type(&DataType::Simple(ParameteredPath::new(data_type.clone())))
                     .into_int_type()
                     .const_int(*value as u64, false)
                     .into(),
@@ -179,7 +183,7 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             CompiledStatement::FunctionCall { path, arguments } => {
-                let function = self.module.get_function(&path.0.join("::")).unwrap();
+                let function = self.module.get_function(&path.path.0.join("::")).unwrap();
 
                 let returned = self
                     .builder
@@ -244,7 +248,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // emit merge block
                 self.builder.position_at_end(cont_bb);
 
-                if returned_type.param_type.path.0 == vec!["void".to_string()] {
+                if returned_type.get_base_path().path.0 == vec!["void".to_string()] {
                     None
                 } else {
                     let phi = self
@@ -303,11 +307,7 @@ impl<'ctx> CodeGen<'ctx> {
                 unsafe {
                     self.builder
                         .build_gep(
-                            self.get_type(&{
-                                let mut data_type = struct_type.clone();
-                                data_type.references.clear();
-                                data_type
-                            }),
+                            self.get_type(&DataType::Simple(struct_type.get_base_path().clone())),
                             Self::build_statement(self, &parent, variables)
                                 .unwrap()
                                 .into_pointer_value(),
@@ -347,7 +347,7 @@ impl<'ctx> CodeGen<'ctx> {
             ),
             CompiledStatement::Initialize { data_type, fields } => {
                 let mut zero = self
-                    .get_type(&DataType::make_simple(data_type.clone()))
+                    .get_type(&DataType::Simple(data_type.clone()))
                     .into_struct_type()
                     .const_zero();
                 for (i, f) in fields.iter().enumerate() {
@@ -410,7 +410,7 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
                     .map(|param| codegen.get_type(&param.data_type).into())
                     .collect::<Vec<_>>();
                 let fn_type: inkwell::types::FunctionType<'_> =
-                    if function.return_type.param_type.path.0 == vec!["void".to_string()] {
+                    if function.return_type.get_base_path().path.0 == vec!["void".to_string()] {
                         context.void_type().fn_type(param_types.as_slice(), false)
                     } else {
                         codegen

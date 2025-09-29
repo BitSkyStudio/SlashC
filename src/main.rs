@@ -1,5 +1,5 @@
 use crate::{
-    ast::{ASTFunction, ASTFunctionParameter, ASTMember, DataType, ParamType},
+    ast::{ASTFunction, ASTFunctionParameter, ASTMember, DataType, ParameteredPath},
     compile::{Compiler, ItemPath},
 };
 
@@ -21,9 +21,15 @@ fn main() {
         return_type: DataType::void(),
         parameters: vec![ASTFunctionParameter {
             name: "value".to_string(),
-            data_type: DataType::make_simple(ItemPath::single("i64")),
+            data_type: DataType::Simple(ParameteredPath::new(ItemPath::single("i64"))),
         }],
     });
     compiler.add_sources(vec![print_function]);
     codegen::testrun(&compiler).unwrap();
+    /*let mut vec = Vec::new();
+    {
+        let a = 5;
+        vec.push(&a);
+    }
+    println!("{}", vec[0]);*/
 }
