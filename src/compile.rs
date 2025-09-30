@@ -8,24 +8,8 @@ use crate::{
     lexer::{Comparison, Operator, UnaryOperator},
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ItemPath(pub Vec<String>);
-impl ItemPath {
-    pub fn new() -> Self {
-        ItemPath(Vec::new())
-    }
-    pub fn single(value: impl ToString) -> Self {
-        ItemPath::new().extend(value.to_string())
-    }
-    pub fn extend(&self, value: impl ToString) -> Self {
-        let mut new_path = self.clone();
-        new_path.0.push(value.to_string());
-        new_path
-    }
-}
-
 pub struct Compiler {
-    pub sources: HashMap<ItemPath, ASTMember>,
+    pub sources: HashMap<String, ASTMember>,
 }
 impl Compiler {
     pub fn new() -> Self {
@@ -35,13 +19,13 @@ impl Compiler {
     }
     pub fn add_sources(&mut self, sources: Vec<ASTMember>) {
         for member in sources {
-            if let Some(previous) = self.sources.insert(member.get_path().clone(), member) {
+            if let Some(previous) = self.sources.insert(member.get_path().to_string(), member) {
                 println!("redefined member {:?}", previous.get_path());
             }
         }
     }
-    pub fn compile_function(&self, function: ItemPath) -> CompiledFunction {
-        let function = match self.sources.get(&function).unwrap() {
+    pub fn compile_function(&self, function: ParameteredPath) -> CompiledFunction {
+        let function = match self.sources.get(&function.path).unwrap() {
             ASTMember::Function(function) => function,
             _ => panic!(),
         };
@@ -188,12 +172,12 @@ impl CompiledBlock {
             ASTExpression::Literal(literal) => match literal {
                 ASTLiteral::Integer(value) => CompiledStatement::IntegerLiteral {
                     value: *value,
-                    data_type: ItemPath::single("i64"),
+                    integer_type: "i64".to_string(),
                 },
                 ASTLiteral::Float(_) => todo!(),
                 ASTLiteral::Bool(value) => CompiledStatement::IntegerLiteral {
                     value: if *value { 1 } else { 0 },
-                    data_type: ItemPath::single("bool"),
+                    integer_type: "bool".to_string(),
                 },
             },
             ASTExpression::Operator {
@@ -204,12 +188,11 @@ impl CompiledBlock {
                 let left = Self::compile_expression(left, context, compiler);
                 let right = Self::compile_expression(right, context, compiler);
                 Self::make_function_call(
-                    ParameteredPath::new(
-                        left.get_return_type(compiler)
-                            .get_base_path()
-                            .path
-                            .extend(format!("operator_{}", operator.get_name())),
-                    ),
+                    ParameteredPath::new(format!(
+                        "{}::operator_{}",
+                        left.get_return_type(compiler).get_base_path().path,
+                        operator.get_name()
+                    )),
                     vec![left, right],
                     context,
                     compiler,
@@ -221,13 +204,11 @@ impl CompiledBlock {
             } => {
                 let expression = Self::compile_expression(expression, context, compiler);
                 Self::make_function_call(
-                    ParameteredPath::new(
-                        expression
-                            .get_return_type(compiler)
-                            .get_base_path()
-                            .path
-                            .extend(format!("operator_{}", operator.get_name())),
-                    ),
+                    ParameteredPath::new(format!(
+                        "{}::operator_{}",
+                        expression.get_return_type(compiler).get_base_path().path,
+                        operator.get_name()
+                    )),
                     vec![expression],
                     context,
                     compiler,
@@ -320,11 +301,14 @@ impl CompiledBlock {
                 parameters,
             } => {
                 let compiled_expression = Self::compile_expression(&expression, context, compiler);
-                let target_method = compiled_expression
-                    .get_return_type(compiler)
-                    .get_base_path()
-                    .path
-                    .extend(method);
+                let target_method = format!(
+                    "{}::{}",
+                    compiled_expression
+                        .get_return_type(compiler)
+                        .get_base_path()
+                        .path,
+                    method
+                );
                 let mut method_params = Vec::new();
                 method_params.push(compiled_expression);
                 for parameter in parameters {
@@ -345,7 +329,7 @@ impl CompiledBlock {
         context: &FunctionCompileContext,
         compiler: &Compiler,
     ) -> CompiledStatement {
-        let name = function.path.0.join("::");
+        let name = function.path.clone();
         for (base_int_type, number) in [("i64", true), ("bool", false)] {
             if name.starts_with(base_int_type)
                 && name[base_int_type.len()..].starts_with("::operator_")
@@ -406,11 +390,7 @@ impl CompiledBlock {
                 }
             }
         }
-        match compiler
-            .sources
-            .get(&function.path)
-            .expect(&function.path.0.join("::"))
-        {
+        match compiler.sources.get(&function.path).expect(&function.path) {
             ASTMember::Function(ast_function) => CompiledStatement::FunctionCall {
                 path: function,
                 arguments: parameters
@@ -455,7 +435,7 @@ impl CompiledBlock {
 #[derive(Debug)]
 pub enum CompiledStatement {
     IntegerLiteral {
-        data_type: ItemPath,
+        integer_type: String,
         value: i64,
     },
     GetVariable {
@@ -507,9 +487,10 @@ pub enum CompiledStatement {
 impl CompiledStatement {
     pub fn get_return_type(&self, compiler: &Compiler) -> DataType {
         match self {
-            CompiledStatement::IntegerLiteral { value, data_type } => {
-                DataType::Simple(ParameteredPath::new(data_type.clone()))
-            }
+            CompiledStatement::IntegerLiteral {
+                value,
+                integer_type: data_type,
+            } => DataType::Simple(ParameteredPath::new(data_type.clone())),
             CompiledStatement::GetVariable {
                 variable,
                 data_type,
@@ -524,9 +505,7 @@ impl CompiledStatement {
                 | Operator::And
                 | Operator::Or
                 | Operator::Xor => a.get_return_type(compiler),
-                Operator::Comparison(_) => {
-                    DataType::Simple(ParameteredPath::new(ItemPath::single("bool")))
-                }
+                Operator::Comparison(_) => DataType::Simple(ParameteredPath::new("bool")),
             },
             CompiledStatement::IntegerUnaryOp { a, op } => a.get_return_type(compiler),
             CompiledStatement::FunctionCall { path, arguments } => {

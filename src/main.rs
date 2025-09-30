@@ -1,6 +1,6 @@
 use crate::{
     ast::{ASTFunction, ASTFunctionParameter, ASTMember, DataType, ParameteredPath},
-    compile::{Compiler, ItemPath},
+    compile::Compiler,
 };
 
 mod ast;
@@ -17,11 +17,11 @@ fn main() {
     compiler.add_sources(sources);
     let print_function = ASTMember::Function(ASTFunction {
         body: None,
-        name: ItemPath::single("print"),
+        name: "print".to_string(),
         return_type: DataType::void(),
         parameters: vec![ASTFunctionParameter {
             name: "value".to_string(),
-            data_type: DataType::Simple(ParameteredPath::new(ItemPath::single("i64"))),
+            data_type: DataType::Simple(ParameteredPath::new("i64")),
         }],
     });
     compiler.add_sources(vec![print_function]);

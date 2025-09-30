@@ -1,22 +1,22 @@
 use crate::{
-    compile::{CompiledStatement, ItemPath},
+    compile::CompiledStatement,
     lexer::{Comparison, Operator, Token, TokenList, UnaryOperator},
 };
 use anyhow::{Result, anyhow};
 
-pub fn parse_item_path(tokens: &mut TokenList) -> Result<ItemPath> {
-    Ok(ItemPath::single(tokens.expect_identifier()?.0))
+pub fn parse_item_path(tokens: &mut TokenList) -> Result<String> {
+    Ok(tokens.expect_identifier()?.0)
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ParameteredPath {
-    pub path: ItemPath,
+    pub path: String,
     pub template_args: Vec<ParameteredPath>,
 }
 impl ParameteredPath {
-    pub fn new(path: ItemPath) -> ParameteredPath {
+    pub fn new(path: impl ToString) -> ParameteredPath {
         ParameteredPath {
-            path,
+            path: path.to_string(),
             template_args: Vec::new(),
         }
     }
@@ -45,7 +45,7 @@ pub enum DataType {
 }
 impl DataType {
     pub fn void() -> Self {
-        DataType::Simple(ParameteredPath::new(ItemPath::single("void")))
+        DataType::Simple(ParameteredPath::new("void"))
     }
     pub fn get_base_path(&self) -> &ParameteredPath {
         match self {
@@ -88,19 +88,19 @@ pub enum Mutability {
 }
 #[derive(Debug)]
 pub struct ASTFunction {
-    pub name: ItemPath,
+    pub name: String,
     pub return_type: DataType,
     pub parameters: Vec<ASTFunctionParameter>,
     pub body: Option<ASTBlock>,
 }
 pub fn parse_function(
     tokens: &mut TokenList,
-    base_path: ItemPath,
+    base_path: String,
     this_type: Option<ParameteredPath>,
 ) -> Result<ASTFunction> {
     Ok(ASTFunction {
         return_type: parse_data_type(tokens)?,
-        name: base_path.extend(tokens.expect_identifier()?.0),
+        name: base_path + &tokens.expect_identifier()?.0,
         parameters: {
             let mut parameters = Vec::new();
             tokens.expect_token(Token::LParen)?;
@@ -110,7 +110,7 @@ pub fn parse_function(
                     break;
                 }
                 let mut data_type = parse_data_type(tokens)?;
-                if valid_this && data_type.get_base_path().path.0 == vec!["this".to_string()] {
+                if valid_this && data_type.get_base_path().path == "this" {
                     *data_type.get_base_path_mut() = this_type.clone().unwrap();
                     parameters.push(ASTFunctionParameter {
                         name: "this".to_string(),
@@ -286,9 +286,9 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
         Token::Number(value) => ASTExpression::Literal(ASTLiteral::Float(value)),
         Token::Bool(value) => ASTExpression::Literal(ASTLiteral::Bool(value)),
         Token::Identifier(identifier) => {
-            let mut function = ItemPath::single(&identifier);
+            let mut function = identifier.clone();
             while tokens.is_expected_and_take(Token::DoubleColon)?.0 {
-                function = function.extend(tokens.expect_identifier()?.0.as_str());
+                function = function + "::" + &tokens.expect_identifier()?.0;
             }
             if tokens.is_expected_and_take(Token::LParen)?.0 {
                 let mut parameters = Vec::new();
@@ -434,7 +434,7 @@ pub enum ASTLiteral {
 
 #[derive(Debug)]
 pub struct ASTStruct {
-    pub name: ItemPath,
+    pub name: String,
     pub fields: Vec<ASTStructField>,
 }
 #[derive(Debug)]
@@ -443,9 +443,9 @@ pub struct ASTStructField {
     pub data_type: DataType,
 }
 
-pub fn parse_struct(tokens: &mut TokenList, base_path: ItemPath) -> Result<Vec<ASTMember>> {
+pub fn parse_struct(tokens: &mut TokenList, base_path: String) -> Result<Vec<ASTMember>> {
     let mut ast_members = Vec::new();
-    let name = base_path.extend(tokens.expect_identifier()?.0);
+    let name = base_path + &tokens.expect_identifier()?.0;
     tokens.expect_token(Token::LBrace)?;
     let mut fields = Vec::new();
     while !tokens.is_expected_and_take(Token::RBrace)?.0 {
@@ -459,7 +459,7 @@ pub fn parse_struct(tokens: &mut TokenList, base_path: ItemPath) -> Result<Vec<A
             None => {
                 ast_members.push(ASTMember::Function(parse_function(
                     tokens,
-                    name.clone(),
+                    format!("{}::", name),
                     Some(ParameteredPath::new(name.clone())),
                 )?));
             }
@@ -474,7 +474,7 @@ pub enum ASTMember {
     Struct(ASTStruct),
 }
 impl ASTMember {
-    pub fn get_path(&self) -> &ItemPath {
+    pub fn get_path(&self) -> &str {
         match self {
             ASTMember::Function(function) => &function.name,
             ASTMember::Struct(structure) => &structure.name,
@@ -485,11 +485,11 @@ pub fn parse_sources(tokens: &mut TokenList) -> Result<Vec<ASTMember>> {
     let mut members = Vec::new();
     while !tokens.is_empty() {
         if tokens.is_expected_and_take(Token::Struct)?.0 {
-            members.extend(parse_struct(tokens, ItemPath::new())?);
+            members.extend(parse_struct(tokens, String::new())?);
         } else {
             members.push(ASTMember::Function(parse_function(
                 tokens,
-                ItemPath::new(),
+                String::new(),
                 None,
             )?));
         }

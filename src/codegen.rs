@@ -9,7 +9,7 @@ use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 use std::error::Error;
 
 use crate::ast::{ASTFunction, ASTMember, DataType, ParameteredPath};
-use crate::compile::{CompiledBlock, CompiledFunction, CompiledStatement, Compiler, ItemPath};
+use crate::compile::{CompiledBlock, CompiledFunction, CompiledStatement, Compiler};
 use crate::lexer::{Comparison, Operator, UnaryOperator};
 
 /// Convenience type alias for the `sum` function.
@@ -33,8 +33,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn get_type(&self, path: &DataType) -> BasicTypeEnum<'ctx> {
         match path {
             DataType::Simple(parametered_path) => {
-                let path = parametered_path.path.0.join("::");
-                match path.as_str() {
+                match parametered_path.path.as_str() {
                     "i64" => self.context.i64_type().as_basic_type_enum(),
                     "bool" => self.context.bool_type().as_basic_type_enum(),
                     //todo: void
@@ -100,7 +99,10 @@ impl<'ctx> CodeGen<'ctx> {
         variables: &Vec<PointerValue<'a>>,
     ) -> Option<BasicValueEnum<'a>> {
         match statement {
-            CompiledStatement::IntegerLiteral { value, data_type } => Some(
+            CompiledStatement::IntegerLiteral {
+                value,
+                integer_type: data_type,
+            } => Some(
                 self.get_type(&DataType::Simple(ParameteredPath::new(data_type.clone())))
                     .into_int_type()
                     .const_int(*value as u64, false)
@@ -183,7 +185,7 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             CompiledStatement::FunctionCall { path, arguments } => {
-                let function = self.module.get_function(&path.path.0.join("::")).unwrap();
+                let function = self.module.get_function(&path.path).unwrap();
 
                 let returned = self
                     .builder
@@ -248,7 +250,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // emit merge block
                 self.builder.position_at_end(cont_bb);
 
-                if returned_type.get_base_path().path.0 == vec!["void".to_string()] {
+                if returned_type.get_base_path().path == "void" {
                     None
                 } else {
                     let phi = self
@@ -389,16 +391,14 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
     };
 
     for (path, item) in &compiler.sources {
-        let name = path.0.join("::");
         match item {
             ASTMember::Struct(structure) => {
-                codegen.context.opaque_struct_type(&name);
+                codegen.context.opaque_struct_type(&path);
             }
             _ => {}
         }
     }
     for (path, item) in &compiler.sources {
-        let name = path.0.join("::");
         match item {
             ASTMember::Function(function) => {
                 if function.body.is_none() {
@@ -410,7 +410,7 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
                     .map(|param| codegen.get_type(&param.data_type).into())
                     .collect::<Vec<_>>();
                 let fn_type: inkwell::types::FunctionType<'_> =
-                    if function.return_type.get_base_path().path.0 == vec!["void".to_string()] {
+                    if function.return_type.get_base_path().path == "void" {
                         context.void_type().fn_type(param_types.as_slice(), false)
                     } else {
                         codegen
@@ -418,16 +418,15 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
                             .fn_type(param_types.as_slice(), false)
                     };
 
-                codegen.module.add_function(&name, fn_type, None);
+                codegen.module.add_function(&path, fn_type, None);
             }
             _ => {}
         }
     }
     for (path, item) in &compiler.sources {
-        let name = path.0.join("::");
         match item {
             ASTMember::Struct(structure) => {
-                codegen.context.get_struct_type(&name).unwrap().set_body(
+                codegen.context.get_struct_type(&path).unwrap().set_body(
                     structure
                         .fields
                         .iter()
@@ -441,13 +440,15 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
         }
     }
     for (path, item) in &compiler.sources {
-        let name = path.0.join("::");
         match item {
             ASTMember::Function(function) => {
                 if function.body.is_none() {
                     continue;
                 }
-                codegen.jit_compile_function(name, compiler.compile_function(path.clone()));
+                codegen.jit_compile_function(
+                    path.clone(),
+                    compiler.compile_function(ParameteredPath::new(path)),
+                );
             }
             _ => {}
         }
