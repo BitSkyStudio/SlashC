@@ -4,14 +4,37 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 
-pub fn parse_item_path(tokens: &mut TokenList) -> Result<String> {
-    Ok(tokens.expect_identifier()?.0)
+pub fn parse_param_path(tokens: &mut TokenList) -> Result<ParameteredPath> {
+    let mut path = tokens.expect_identifier()?.0;
+    while tokens.is_expected_and_take(Token::DoubleColon)?.0 {
+        path = format!("{}::{}", path, tokens.expect_identifier()?.0);
+    }
+    let mut template_args = Vec::new();
+    if tokens
+        .is_expected_and_take(Token::Operator(Operator::Comparison(Comparison::Less)))?
+        .0
+    {
+        while !tokens
+            .is_expected_and_take(Token::Operator(Operator::Comparison(Comparison::Greater)))?
+            .0
+        {
+            template_args.push(parse_data_type(tokens)?);
+            if !tokens.is_expected_and_take(Token::Comma)?.0 {
+                tokens.expect_token(Token::Operator(Operator::Comparison(Comparison::Greater)))?;
+                break;
+            }
+        }
+    }
+    Ok(ParameteredPath {
+        path,
+        template_args,
+    })
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ParameteredPath {
     pub path: String,
-    pub template_args: Vec<ParameteredPath>,
+    pub template_args: Vec<DataType>,
 }
 impl ParameteredPath {
     pub fn new(path: impl ToString) -> ParameteredPath {
@@ -20,21 +43,6 @@ impl ParameteredPath {
             template_args: Vec::new(),
         }
     }
-}
-pub fn parse_param_type(tokens: &mut TokenList) -> Result<ParameteredPath> {
-    Ok(ParameteredPath {
-        path: parse_item_path(tokens)?,
-        template_args: {
-            let mut template_args = Vec::new();
-            if tokens
-                .is_expected_and_take(Token::Operator(Operator::Comparison(Comparison::Less)))?
-                .0
-            {
-                todo!()
-            }
-            template_args
-        },
-    })
 }
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum DataType {
@@ -78,7 +86,7 @@ pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
                 Box::new(parse_data_type(tokens)?),
             ))
         }
-        _ => Ok(DataType::Simple(parse_param_type(tokens)?)),
+        _ => Ok(DataType::Simple(parse_param_path(tokens)?)),
     }
 }
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
