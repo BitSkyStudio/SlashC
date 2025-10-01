@@ -147,9 +147,9 @@ impl CompiledBlock {
                     statements.push(CompiledStatement::Store {
                         target: Box::new(CompiledStatement::GetVariable {
                             variable: variable,
-                            data_type: data_type.clone(), //needs to be a reference
+                            data_type: data_type.clone(),
                         }),
-                        value: Box::new(expression),
+                        value: Box::new(expression.implicit_cast_to(&data_type, compiler).unwrap()),
                     });
                 }
             }
@@ -321,6 +321,13 @@ impl CompiledBlock {
                     compiler,
                 )
             }
+            ASTExpression::New { expression } => {
+                let parent = Box::new(Self::compile_expression(expression, context, compiler));
+                CompiledStatement::New {
+                    alloc_type: parent.get_return_type(compiler),
+                    parent,
+                }
+            }
         }
     }
     pub fn make_function_call(
@@ -483,6 +490,10 @@ pub enum CompiledStatement {
         parent: Box<CompiledStatement>,
         returned_type: DataType,
     },
+    New {
+        parent: Box<CompiledStatement>,
+        alloc_type: DataType,
+    },
 }
 impl CompiledStatement {
     pub fn get_return_type(&self, compiler: &Compiler) -> DataType {
@@ -540,31 +551,53 @@ impl CompiledStatement {
             CompiledStatement::Initialize { data_type, fields } => {
                 DataType::Simple(data_type.clone())
             }
+            CompiledStatement::New { alloc_type, .. } => {
+                DataType::Pointer(Mutability::Immutable, false, Box::new(alloc_type.clone()))
+            }
         }
     }
-    pub fn implicit_cast_to(self, to: &DataType, compiler: &Compiler) -> Option<CompiledStatement> {
-        Self::implicit_cast_type_to(self.get_return_type(compiler), to, self)
-    }
-    pub fn implicit_cast_type_to(
-        from: DataType,
+    pub fn implicit_cast_to(
+        mut self,
         to: &DataType,
-        statement: CompiledStatement,
+        compiler: &Compiler,
     ) -> Option<CompiledStatement> {
-        println!("from: {:?} to: {:?}", from, to);
-        if from == *to {
-            return Some(statement);
+        let from = self.get_return_type(compiler);
+        let mut derefs = Vec::new();
+        match Self::implicit_cast_recurse(&from, to, &mut derefs) {
+            true => {
+                for deref in derefs {
+                    self = CompiledStatement::Dereference {
+                        parent: Box::new(self),
+                        returned_type: deref,
+                    }
+                }
+                Some(self)
+            }
+            false => None,
+        }
+    }
+    fn implicit_cast_recurse(from: &DataType, to: &DataType, derefs: &mut Vec<DataType>) -> bool {
+        if *from == *to {
+            return true;
+        }
+        match (&from, &to) {
+            (DataType::Pointer(_, _, ptr_type), DataType::Reference(_, ref_type)) => {
+                if ptr_type == ref_type {
+                    return true;
+                }
+            }
+            _ => {}
         }
         match from {
-            DataType::Simple(parametered_path) => None,
+            DataType::Simple(parametered_path) => false,
             DataType::Reference(mutability, data_type) => {
-                Self::implicit_cast_type_to((*data_type).clone(), to, statement).map(|statement| {
-                    CompiledStatement::Dereference {
-                        parent: Box::new(statement),
-                        returned_type: (*data_type).clone(),
-                    }
-                })
+                derefs.push((**data_type).clone());
+                Self::implicit_cast_recurse(&data_type, to, derefs)
             }
-            DataType::Pointer(mutability, _, data_type) => todo!(),
+            DataType::Pointer(mutability, _, data_type) => {
+                derefs.push((**data_type).clone());
+                Self::implicit_cast_recurse(&data_type, to, derefs)
+            }
             DataType::Lock(data_type) => todo!(),
         }
     }

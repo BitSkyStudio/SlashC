@@ -75,7 +75,7 @@ impl DataType {
 pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
     match tokens.peek()?.0 {
         Token::Reference => {
-            tokens.take();
+            tokens.take().unwrap();
             let mutable = tokens.is_expected_and_take(Token::Mut)?.0;
             Ok(DataType::Reference(
                 if mutable {
@@ -83,6 +83,20 @@ pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
                 } else {
                     Mutability::Immutable
                 },
+                Box::new(parse_data_type(tokens)?),
+            ))
+        }
+        Token::Operator(Operator::Multiply) => {
+            tokens.take().unwrap();
+            let mutable = tokens.is_expected_and_take(Token::Mut)?.0;
+            let weak = tokens.is_expected_and_take(Token::Weak)?.0;
+            Ok(DataType::Pointer(
+                if mutable {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                },
+                weak,
                 Box::new(parse_data_type(tokens)?),
             ))
         }
@@ -278,6 +292,7 @@ fn parse_expression_biops(
     Ok(left)
 }
 pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression> {
+    let is_new = tokens.is_expected_and_take(Token::New)?.0;
     let unary_operator = match tokens.peek()?.0 {
         Token::Not => {
             tokens.take().unwrap();
@@ -379,13 +394,18 @@ pub fn parse_expression_primary(tokens: &mut TokenList) -> Result<ASTExpression>
         }
         _ => {}
     }
-    Ok(match unary_operator {
-        Some(operator) => ASTExpression::UnaryOperator {
+    if let Some(operator) = unary_operator {
+        expression = ASTExpression::UnaryOperator {
             expression: Box::new(expression),
             operator,
-        },
-        None => expression,
-    })
+        };
+    }
+    if is_new {
+        expression = ASTExpression::New {
+            expression: Box::new(expression),
+        };
+    }
+    Ok(expression)
 }
 #[derive(Clone, Debug)]
 pub enum ASTExpression {
@@ -423,6 +443,9 @@ pub enum ASTExpression {
         expression: Box<ASTExpression>,
         method: String,
         parameters: Vec<ASTExpression>,
+    },
+    New {
+        expression: Box<ASTExpression>,
     },
 }
 impl ASTExpression {

@@ -48,7 +48,10 @@ impl<'ctx> CodeGen<'ctx> {
                 .context
                 .ptr_type(AddressSpace::default())
                 .as_basic_type_enum(),
-            DataType::Pointer(mutability, _, data_type) => todo!(),
+            DataType::Pointer(mutability, _, data_type) => self
+                .context
+                .ptr_type(AddressSpace::default())
+                .as_basic_type_enum(),
             DataType::Lock(data_type) => todo!(),
         }
     }
@@ -366,6 +369,19 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 Some(zero.as_basic_value_enum())
             }
+            CompiledStatement::New { parent, alloc_type } => {
+                let pointer = self
+                    .builder
+                    .build_malloc(self.get_type(alloc_type), "malloc")
+                    .unwrap();
+                self.builder
+                    .build_store(
+                        pointer,
+                        Self::build_statement(self, &parent, variables).unwrap(),
+                    )
+                    .unwrap();
+                Some(pointer.as_basic_value_enum())
+            }
         }
     }
 }
@@ -445,10 +461,9 @@ pub fn testrun(compiler: &Compiler) -> Result<(), Box<dyn Error>> {
                 if function.body.is_none() {
                     continue;
                 }
-                codegen.jit_compile_function(
-                    path.clone(),
-                    compiler.compile_function(ParameteredPath::new(path)),
-                );
+                let compiled = compiler.compile_function(ParameteredPath::new(path));
+                println!("compiled {}: {:#?}", path, compiled.block);
+                codegen.jit_compile_function(path.clone(), compiled);
             }
             _ => {}
         }

@@ -41,6 +41,7 @@ pub enum Token {
     Mut,
     Match,
     Not,
+    Weak,
 }
 #[derive(Debug, Clone)]
 pub struct TokenPosition {
@@ -152,6 +153,7 @@ pub fn lex(input: String) -> anyhow::Result<Vec<(Token, TokenPosition)>> {
     config.keywords.push(("enum", Token::Enum));
     config.keywords.push(("mut", Token::Mut));
     config.keywords.push(("match", Token::Match));
+    config.keywords.push(("weak", Token::Weak));
 
     let mut tokens = Vec::new();
 
