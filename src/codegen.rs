@@ -44,15 +44,15 @@ impl<'ctx> CodeGen<'ctx> {
                         .as_basic_type_enum(),
                 }
             }
-            DataType::Reference(mutability, data_type) => self
+            DataType::Reference { .. } => self
                 .context
                 .ptr_type(AddressSpace::default())
                 .as_basic_type_enum(),
-            DataType::Pointer(mutability, _, data_type) => self
+            DataType::Pointer { .. } => self
                 .context
                 .ptr_type(AddressSpace::default())
                 .as_basic_type_enum(),
-            DataType::Lock(data_type) => todo!(),
+            DataType::Lock { .. } => todo!(),
         }
     }
     fn jit_compile_function(&mut self, function_name: String, compiled_function: CompiledFunction) {

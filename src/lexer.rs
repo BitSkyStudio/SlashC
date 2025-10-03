@@ -42,6 +42,7 @@ pub enum Token {
     Match,
     Not,
     Weak,
+    Final,
 }
 #[derive(Debug, Clone)]
 pub struct TokenPosition {

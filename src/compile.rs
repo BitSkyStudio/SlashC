@@ -126,10 +126,11 @@ impl CompiledBlock {
                     statements.push(CompiledStatement::Store {
                         target: Box::new(
                             left.implicit_cast_to(
-                                &DataType::Reference(
-                                    Mutability::Immutable,
-                                    Box::new(right_type.clone()),
-                                ),
+                                &DataType::Reference {
+                                    mutable: Mutability::Immutable,
+                                    value: Box::new(right_type.clone()),
+                                    is_final: false,
+                                },
                                 compiler,
                             )
                             .unwrap(),
@@ -280,12 +281,13 @@ impl CompiledBlock {
                         parent: Box::new(
                             parent
                                 .implicit_cast_to(
-                                    &DataType::Reference(
-                                        Mutability::Immutable,
-                                        Box::new(DataType::Simple(
+                                    &DataType::Reference {
+                                        mutable: Mutability::Immutable,
+                                        value: Box::new(DataType::Simple(
                                             parent_type.get_base_path().clone(),
                                         )),
-                                    ),
+                                        is_final: false,
+                                    },
                                     compiler,
                                 )
                                 .unwrap(),
@@ -505,7 +507,11 @@ impl CompiledStatement {
             CompiledStatement::GetVariable {
                 variable,
                 data_type,
-            } => DataType::Reference(Mutability::Immutable, Box::new(data_type.clone())),
+            } => DataType::Reference {
+                mutable: Mutability::Immutable,
+                value: Box::new(data_type.clone()),
+                is_final: false,
+            },
             CompiledStatement::Store { target, value } => DataType::void(),
             CompiledStatement::IntegerOp { a, b, op } => match op {
                 Operator::Plus
@@ -541,7 +547,11 @@ impl CompiledStatement {
                 ASTMember::Struct(aststruct) => {
                     let mut field_type = aststruct.fields[*member as usize].data_type.clone();
                     if *is_reference {
-                        DataType::Reference(Mutability::Immutable, Box::new(field_type.clone()))
+                        DataType::Reference {
+                            mutable: Mutability::Immutable,
+                            value: Box::new(field_type.clone()),
+                            is_final: false,
+                        }
                     } else {
                         field_type
                     }
@@ -551,9 +561,12 @@ impl CompiledStatement {
             CompiledStatement::Initialize { data_type, fields } => {
                 DataType::Simple(data_type.clone())
             }
-            CompiledStatement::New { alloc_type, .. } => {
-                DataType::Pointer(Mutability::Immutable, false, Box::new(alloc_type.clone()))
-            }
+            CompiledStatement::New { alloc_type, .. } => DataType::Pointer {
+                mutable: Mutability::Immutable,
+                is_weak: false,
+                value: Box::new(alloc_type.clone()),
+                is_final: false,
+            },
         }
     }
     pub fn implicit_cast_to(
@@ -581,7 +594,14 @@ impl CompiledStatement {
             return true;
         }
         match (&from, &to) {
-            (DataType::Pointer(_, _, ptr_type), DataType::Reference(_, ref_type)) => {
+            (
+                DataType::Pointer {
+                    value: ptr_type, ..
+                },
+                DataType::Reference {
+                    value: ref_type, ..
+                },
+            ) => {
                 if ptr_type == ref_type {
                     return true;
                 }
@@ -590,15 +610,15 @@ impl CompiledStatement {
         }
         match from {
             DataType::Simple(parametered_path) => false,
-            DataType::Reference(mutability, data_type) => {
-                derefs.push((**data_type).clone());
-                Self::implicit_cast_recurse(&data_type, to, derefs)
+            DataType::Reference { value, .. } => {
+                derefs.push((**value).clone());
+                Self::implicit_cast_recurse(&value, to, derefs)
             }
-            DataType::Pointer(mutability, _, data_type) => {
-                derefs.push((**data_type).clone());
-                Self::implicit_cast_recurse(&data_type, to, derefs)
+            DataType::Pointer { value, .. } => {
+                derefs.push((**value).clone());
+                Self::implicit_cast_recurse(&value, to, derefs)
             }
-            DataType::Lock(data_type) => todo!(),
+            DataType::Lock { value } => todo!(),
         }
     }
 }

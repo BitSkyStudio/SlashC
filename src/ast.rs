@@ -47,9 +47,20 @@ impl ParameteredPath {
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum DataType {
     Simple(ParameteredPath),
-    Reference(Mutability, Box<DataType>),
-    Pointer(Mutability, bool, Box<DataType>),
-    Lock(Box<DataType>),
+    Reference {
+        mutable: Mutability,
+        is_final: bool,
+        value: Box<DataType>,
+    },
+    Pointer {
+        mutable: Mutability,
+        is_weak: bool,
+        is_final: bool,
+        value: Box<DataType>,
+    },
+    Lock {
+        value: Box<DataType>,
+    },
 }
 impl DataType {
     pub fn void() -> Self {
@@ -57,18 +68,18 @@ impl DataType {
     }
     pub fn get_base_path(&self) -> &ParameteredPath {
         match self {
-            DataType::Simple(parametered_path) => parametered_path,
-            DataType::Reference(_, data_type) => data_type.get_base_path(),
-            DataType::Pointer(_, _, data_type) => data_type.get_base_path(),
-            DataType::Lock(data_type) => data_type.get_base_path(),
+            DataType::Simple(path) => path,
+            DataType::Reference { value, .. } => value.get_base_path(),
+            DataType::Pointer { value, .. } => value.get_base_path(),
+            DataType::Lock { value } => value.get_base_path(),
         }
     }
     pub fn get_base_path_mut(&mut self) -> &mut ParameteredPath {
         match self {
-            DataType::Simple(parametered_path) => parametered_path,
-            DataType::Reference(_, data_type) => data_type.get_base_path_mut(),
-            DataType::Pointer(_, _, data_type) => data_type.get_base_path_mut(),
-            DataType::Lock(data_type) => data_type.get_base_path_mut(),
+            DataType::Simple(path) => path,
+            DataType::Reference { value, .. } => value.get_base_path_mut(),
+            DataType::Pointer { value, .. } => value.get_base_path_mut(),
+            DataType::Lock { value } => value.get_base_path_mut(),
         }
     }
 }
@@ -77,28 +88,32 @@ pub fn parse_data_type(tokens: &mut TokenList) -> Result<DataType> {
         Token::Reference => {
             tokens.take().unwrap();
             let mutable = tokens.is_expected_and_take(Token::Mut)?.0;
-            Ok(DataType::Reference(
-                if mutable {
+            let is_final = tokens.is_expected_and_take(Token::Final)?.0;
+            Ok(DataType::Reference {
+                mutable: if mutable {
                     Mutability::Mutable
                 } else {
                     Mutability::Immutable
                 },
-                Box::new(parse_data_type(tokens)?),
-            ))
+                is_final,
+                value: Box::new(parse_data_type(tokens)?),
+            })
         }
         Token::Operator(Operator::Multiply) => {
             tokens.take().unwrap();
             let mutable = tokens.is_expected_and_take(Token::Mut)?.0;
-            let weak = tokens.is_expected_and_take(Token::Weak)?.0;
-            Ok(DataType::Pointer(
-                if mutable {
+            let is_weak = tokens.is_expected_and_take(Token::Weak)?.0;
+            let is_final = tokens.is_expected_and_take(Token::Final)?.0;
+            Ok(DataType::Pointer {
+                mutable: if mutable {
                     Mutability::Mutable
                 } else {
                     Mutability::Immutable
                 },
-                weak,
-                Box::new(parse_data_type(tokens)?),
-            ))
+                is_weak,
+                is_final,
+                value: Box::new(parse_data_type(tokens)?),
+            })
         }
         _ => Ok(DataType::Simple(parse_param_path(tokens)?)),
     }
