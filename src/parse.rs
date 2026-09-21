@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use immutable_string::ImmutableString;
 
-use crate::lex::{Lexer, ParseError, ParseResult, Token};
+use crate::lex::{
+    Lexer, ParseError, ParseResult,
+    Token::{self, Identifier},
+};
 #[derive(Debug)]
 pub struct ASTModule(HashMap<MemberSignature, ASTMember>);
 #[derive(Debug)]
@@ -30,25 +33,18 @@ pub struct ASTEnum {
     generics: Vec<ImmutableString>,
     bounds: ASTGenericBounds,
 }
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct MemberSignature {
     name: ImmutableString,
     argument_count: usize,
 }
 #[derive(Debug)]
-pub enum MethodKind {
-    Method,
-    Static,
-    Consume,
-}
-#[derive(Debug)]
 pub enum ASTMember {
     Attribute {
-        pre_generics: Vec<ImmutableString>,
+        pre_generics: Vec<ASTDataType>,
         data_type: ASTDataType,
     },
-    Method {
-        kind: MethodKind,
+    Function {
         arguments: Vec<(ImmutableString, ASTDataType)>,
         return_type: ASTDataType,
         pre_generics: Vec<ASTDataType>,
@@ -132,17 +128,36 @@ mod idt {
         pub static ref UNINIT: ImmutableString = ImmutableString::from("uninit");
         pub static ref DYN: ImmutableString = ImmutableString::from("dyn");
         pub static ref LET: ImmutableString = ImmutableString::from("let");
+        pub static ref IMPL: ImmutableString = ImmutableString::from("impl");
+        pub static ref DEP: ImmutableString = ImmutableString::from("dep");
     }
 }
-pub fn parse_members(lexer: &mut Lexer) -> ParseResult<HashMap<MemberSignature, ASTMember>> {
+struct MemberClassContext {
+    class: ImmutableString,
+    generics: Vec<ImmutableString>,
+    is_enum: bool,
+}
+pub fn parse_module(lexer: &mut Lexer) -> ParseResult<ASTModule> {
+    let members = parse_members(lexer, None)?;
+    match lexer.peek() {
+        Ok((token, position)) => Err(ParseError::Custom {
+            message: format!("expected eof, got {:?}", token),
+            position,
+        }),
+        Err(ParseError::EOF) => Ok(ASTModule(members)),
+        Err(error) => Err(error),
+    }
+}
+fn parse_members(
+    lexer: &mut Lexer,
+    class: Option<MemberClassContext>,
+) -> ParseResult<HashMap<MemberSignature, ASTMember>> {
     let mut members = HashMap::new();
     loop {
-        match lexer.peek() {
-            Ok(_) => {}
-            Err(ParseError::EOF) => break,
-            Err(error) => return Err(error),
-        }
-        let id = lexer.expect_identifier()?.0;
+        let (id, position) = match lexer.expect_identifier() {
+            Ok(id) => id,
+            Err(_) => break,
+        };
         if id == *idt::CLASS || id == *idt::INTERFACE || id == *idt::STRUCT {
             let kind = if id == *idt::CLASS {
                 ClassKind::Class
@@ -151,6 +166,75 @@ pub fn parse_members(lexer: &mut Lexer) -> ParseResult<HashMap<MemberSignature, 
             } else {
                 ClassKind::Struct
             };
+            let name = lexer.expect_identifier()?.0;
+            let generics = parse_generics_names_if_any(lexer)?;
+            let bounds = parse_generic_bounds_if_any(lexer)?;
+            let mut impls = Vec::new();
+            let mut deps = Vec::new();
+            while let Some(_) = lexer.try_exec(|lexer| {
+                let id = lexer.expect_identifier()?.0;
+                if id == *idt::IMPL {
+                    let dt = parse_type(lexer)?;
+                    let bounds = parse_generic_bounds_if_any(lexer)?;
+                    impls.push((dt, bounds));
+                    Ok(())
+                } else if id == *idt::DEP {
+                    let dt = parse_type(lexer)?;
+                    deps.push(dt);
+                    Ok(())
+                } else {
+                    return Err(ParseError::EOF);
+                }
+            }) {}
+            lexer.expect(Token::LBrace)?;
+            let class_members = parse_members(
+                lexer,
+                Some(MemberClassContext {
+                    class: match &class {
+                        Some(parent_class) => format!("{}::{}", parent_class.class, name).into(),
+                        None => name.clone(),
+                    },
+                    generics: generics.clone(),
+                    is_enum: false,
+                }),
+            )?;
+            lexer.expect(Token::RBrace)?;
+            members.insert(
+                MemberSignature {
+                    name: name.clone(),
+                    argument_count: 0,
+                },
+                ASTMember::Class(ASTClass {
+                    kind,
+                    members: class_members,
+                    impls,
+                    deps,
+                    generics,
+                    bounds,
+                }),
+            );
+        } else if id == *idt::LET {
+            let pre_generics = parse_generics_if_any(lexer)?;
+            let name = lexer.expect_identifier()?.0;
+            lexer.expect(Token::Colon)?;
+            let dt = parse_type(lexer)?;
+            lexer.expect(Token::Semi)?;
+            members.insert(
+                MemberSignature {
+                    name: name.clone(),
+                    argument_count: 1,
+                },
+                ASTMember::Attribute {
+                    pre_generics,
+                    data_type: dt,
+                },
+            );
+        } else {
+            return Err(ParseError::ExpectedToken {
+                expect: vec![].into_boxed_slice(),
+                got: Identifier(id),
+                position,
+            });
         }
     }
     Ok(members)
@@ -296,7 +380,14 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
             } else if identifier == *idt::LOOP {
                 ASTExpression::Loop(parse_block(lexer)?)
             } else {
-                unimplemented!()
+                let id = extend_identifier(lexer, identifier)?;
+                let post_generics = parse_generics_if_any(lexer)?;
+                let arguments = parse_call_arguments(lexer)?;
+                ASTExpression::StaticCall {
+                    name: id,
+                    post_generics,
+                    arguments,
+                }
             }
         }
         Err(_) => {
@@ -326,7 +417,7 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
     }
     Ok(expr)
 }
-pub fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
+fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
     if lexer.expect(Token::LBrace).is_ok() {
         let mut arguments = HashMap::new();
         if lexer.expect(Token::RBrace).is_err() {
@@ -368,6 +459,7 @@ fn parse_type(lexer: &mut Lexer) -> ParseResult<ASTDataType> {
     let (token, position) = lexer.pop()?;
     match token {
         Token::Star => {
+            let checkpoint = lexer.save();
             match lexer.expect_identifier() {
                 Ok((id, _)) => {
                     if id == *idt::UNINIT {
@@ -386,6 +478,7 @@ fn parse_type(lexer: &mut Lexer) -> ParseResult<ASTDataType> {
                 }
                 Err(_) => {}
             }
+            lexer.rollback(checkpoint);
             Ok(ASTDataType::Pointer(Box::new(parse_type(lexer)?)))
         }
         Token::Identifier(id) => {
@@ -439,9 +532,11 @@ fn parse_generics_names_if_any(lexer: &mut Lexer) -> ParseResult<Vec<ImmutableSt
     Ok(generics)
 }
 fn parse_generic_bounds_if_any(lexer: &mut Lexer) -> ParseResult<ASTGenericBounds> {
+    let checkpoint = lexer.save();
     match lexer.expect_identifier() {
         Ok((id, _)) => {
             if id != *idt::IF {
+                lexer.rollback(checkpoint);
                 return Ok(ASTGenericBounds(Vec::new()));
             }
         }

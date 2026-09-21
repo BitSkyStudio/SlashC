@@ -64,7 +64,7 @@ impl TokenPosition {
 }
 pub struct Lexer {
     cursor: usize,
-    tokens: Vec<(Token, TokenPosition)>,
+    pub tokens: Vec<(Token, TokenPosition)>,
 }
 pub struct LexerCheckpoint(usize);
 impl Lexer {
@@ -103,7 +103,7 @@ impl Lexer {
     pub fn expect(&mut self, expect: Token) -> ParseResult<()> {
         let (token, position) = self.peek()?;
         if token == expect {
-            self.pop();
+            self.pop().unwrap();
             Ok(())
         } else {
             Err(ParseError::ExpectedToken {
@@ -116,7 +116,7 @@ impl Lexer {
     pub fn expect_n(&mut self, expect: &[Token]) -> ParseResult<Token> {
         let (token, position) = self.peek()?;
         if expect.contains(&token) {
-            self.pop();
+            self.pop().unwrap();
             Ok(token)
         } else {
             Err(ParseError::ExpectedToken {
@@ -127,9 +127,12 @@ impl Lexer {
         }
     }
     pub fn expect_identifier(&mut self) -> ParseResult<(ImmutableString, TokenPosition)> {
-        let (token, position) = self.pop()?;
+        let (token, position) = self.peek()?;
         match token {
-            Token::Identifier(text) => Ok((text, position)),
+            Token::Identifier(text) => {
+                self.pop().unwrap();
+                Ok((text, position))
+            }
             got => Err(ParseError::ExpectedToken {
                 expect: vec![Token::Identifier("".into())].into_boxed_slice(),
                 got,
@@ -159,9 +162,11 @@ impl Lexer {
         let mut i = 0;
         let mut tokens = Vec::new();
         'outer: while i < source.len() {
-            let slice = source[i..].as_bytes();
-            let first_character = slice[0] as char;
+            let slice = source.as_bytes();
+            let first_character = slice[i] as char;
             if first_character.is_whitespace() {
+                i += 1;
+                column += 1;
                 if first_character == '\n' {
                     line += 1;
                     column = 0;
@@ -214,12 +219,20 @@ impl Lexer {
                     }
                     .shift_back_by_length(),
                 ));
+                continue;
             }
             if Self::is_valid_identifier_character(first_character, true) {
                 let start = i;
                 i += 1;
-                column += 1;
-                while Self::is_valid_identifier_character(slice[i] as char, false) {
+                while Self::is_valid_identifier_character(
+                    {
+                        let Some(c) = slice.get(i) else {
+                            break 'outer;
+                        };
+                        *c as char
+                    },
+                    false,
+                ) {
                     i += 1;
                     column += 1;
                 }
@@ -231,6 +244,7 @@ impl Lexer {
                         line,
                     },
                 ));
+                continue;
             }
             return Err(LexError::InvalidCharacter(
                 first_character,
