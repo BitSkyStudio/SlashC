@@ -9,6 +9,7 @@ pub enum Token {
     Integer(i64),
     Dot,
     Comma,
+    DColon,
     LParen,
     RParen,
     LBrace,
@@ -23,9 +24,10 @@ pub enum Token {
     Plus,
 }
 impl Token {
-    const SYMBOL_TABLE: [(&'static str, Token); 14] = [
+    const SYMBOL_TABLE: [(&'static str, Token); 15] = [
         (".", Token::Dot),
         (",", Token::Comma),
+        ("::", Token::DColon),
         ("(", Token::LParen),
         (")", Token::RParen),
         ("{", Token::LBrace),

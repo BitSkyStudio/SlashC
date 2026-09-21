@@ -3,37 +3,48 @@ use std::collections::HashMap;
 use immutable_string::ImmutableString;
 
 use crate::lex::{Lexer, ParseError, ParseResult, Token};
+#[derive(Debug)]
 pub struct ASTModule(HashMap<MemberSignature, ASTMember>);
+#[derive(Debug)]
 pub enum ClassKind {
     Class,
     Interface,
     Struct,
 }
+#[derive(Debug)]
 pub struct ASTGenericBounds(Vec<(ASTDataType, ASTDataType)>);
+#[derive(Debug)]
 pub struct ASTClass {
     kind: ClassKind,
     members: HashMap<MemberSignature, ASTMember>,
     impls: Vec<(ASTDataType, ASTGenericBounds)>,
     deps: Vec<ASTDataType>,
+    generics: Vec<ImmutableString>,
+    bounds: ASTGenericBounds,
 }
+#[derive(Debug)]
 pub struct ASTEnum {
     members: HashMap<MemberSignature, ASTMember>,
     cases: Vec<ASTDataType>,
     impls: Vec<ASTDataType>,
+    generics: Vec<ImmutableString>,
+    bounds: ASTGenericBounds,
 }
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct MemberSignature {
     name: ImmutableString,
     argument_count: usize,
 }
+#[derive(Debug)]
 pub enum MethodKind {
     Method,
     Static,
     Consume,
 }
+#[derive(Debug)]
 pub enum ASTMember {
     Attribute {
-        pre_generics: Vec<ASTDataType>,
+        pre_generics: Vec<ImmutableString>,
         data_type: ASTDataType,
     },
     Method {
@@ -41,25 +52,28 @@ pub enum ASTMember {
         arguments: Vec<(ImmutableString, ASTDataType)>,
         return_type: ASTDataType,
         pre_generics: Vec<ASTDataType>,
-        post_generics: Vec<ASTDataType>,
+        post_generics: Vec<ImmutableString>,
         body: ASTBlock,
         bounds: ASTGenericBounds,
     },
     Class(ASTClass),
     Enum(ASTEnum),
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ASTDataType {
     Type(ImmutableString, Vec<ASTDataType>),
     Pointer(Box<ASTDataType>),
     UninitPointer(Box<ASTDataType>),
     DynPointer(Vec<ASTDataType>),
 }
+#[derive(Debug)]
 pub struct ASTBlock(Vec<ASTStatement>);
+#[derive(Debug)]
 pub struct ASTStatement {
     left: Option<ASTAssignTarget>,
     right: ASTExpression,
 }
+#[derive(Debug)]
 pub enum ASTAssignTarget {
     Expression(ASTExpression),
     Rip {
@@ -67,6 +81,7 @@ pub enum ASTAssignTarget {
         type_hint: Option<ASTDataType>,
     },
 }
+#[derive(Debug)]
 pub enum ASTExpression {
     Void,
     Let {
@@ -79,27 +94,26 @@ pub enum ASTExpression {
         member: ImmutableString,
         pre_generics: Vec<ASTDataType>,
         post_generics: Vec<ASTDataType>,
-        arguments: Vec<ASTExpression>,
+        arguments: ASTCallArguments,
+    },
+    StaticCall {
+        name: ImmutableString,
+        post_generics: Vec<ASTDataType>,
+        arguments: ASTCallArguments,
     },
     If {
         condition: Box<ASTExpression>,
-        pass: ASTBlock,
-        fail: ASTBlock,
+        pass: Box<ASTExpression>,
+        fail: Box<ASTExpression>,
     },
     Loop(ASTBlock),
     Block(ASTBlock),
     Move(ImmutableString),
-    Initializer {
-        type_hint: Option<ASTDataType>,
-        initializators: HashMap<ImmutableString, ASTExpression>,
-    },
-    MemberCallInitializer {
-        target: Box<ASTExpression>,
-        member: ImmutableString,
-        pre_generics: Vec<ASTDataType>,
-        post_generics: Vec<ASTDataType>,
-        arguments: HashMap<ImmutableString, ASTExpression>,
-    },
+}
+#[derive(Debug)]
+pub enum ASTCallArguments {
+    Function(Vec<ASTExpression>),
+    Initializer(HashMap<ImmutableString, ASTExpression>),
 }
 mod idt {
     use immutable_string::ImmutableString;
@@ -120,7 +134,7 @@ mod idt {
         pub static ref LET: ImmutableString = ImmutableString::from("let");
     }
 }
-/*pub fn parse_members(lexer: &mut Lexer) -> ParseResult<HashMap<MemberSignature, ASTMember>> {
+pub fn parse_members(lexer: &mut Lexer) -> ParseResult<HashMap<MemberSignature, ASTMember>> {
     let mut members = HashMap::new();
     loop {
         match lexer.peek() {
@@ -128,12 +142,19 @@ mod idt {
             Err(ParseError::EOF) => break,
             Err(error) => return Err(error),
         }
-        match lexer.expect_identifier(){
-        Ok()
-    }
+        let id = lexer.expect_identifier()?.0;
+        if id == *idt::CLASS || id == *idt::INTERFACE || id == *idt::STRUCT {
+            let kind = if id == *idt::CLASS {
+                ClassKind::Class
+            } else if id == *idt::INTERFACE {
+                ClassKind::Interface
+            } else {
+                ClassKind::Struct
+            };
+        }
     }
     Ok(members)
-}*/
+}
 fn parse_assign_target(lexer: &mut Lexer) -> ParseResult<ASTAssignTarget> {
     match lexer.peek()?.0 {
         Token::Identifier(identifier) => {
@@ -255,25 +276,22 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
                 ASTExpression::Move(lexer.expect_identifier()?.0)
             } else if identifier == *idt::IF {
                 let condition = parse_expression(lexer)?;
-                let pass = parse_block(lexer)?;
+                let pass = parse_expression(lexer)?;
                 let fail = match lexer.pop()?.0 {
                     Token::Identifier(id) => {
                         if id == *idt::ELSE {
-                            Some(parse_block(lexer)?)
+                            Some(parse_expression(lexer)?)
                         } else {
                             None
                         }
                     }
                     _ => None,
                 }
-                .unwrap_or(ASTBlock(vec![ASTStatement {
-                    left: None,
-                    right: ASTExpression::Void,
-                }]));
+                .unwrap_or(ASTExpression::Void);
                 ASTExpression::If {
                     condition: Box::new(condition),
-                    pass,
-                    fail,
+                    pass: Box::new(pass),
+                    fail: Box::new(fail),
                 }
             } else if identifier == *idt::LOOP {
                 ASTExpression::Loop(parse_block(lexer)?)
@@ -281,7 +299,13 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
                 unimplemented!()
             }
         }
-        Err(_) => todo!(),
+        Err(_) => {
+            if let Some(block) = lexer.try_exec(|lexer| parse_block(lexer)) {
+                ASTExpression::Block(block)
+            } else {
+                unimplemented!()
+            }
+        }
     };
     loop {
         if lexer.expect(Token::Dot).is_err() {
@@ -290,19 +314,7 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
         let pre_generics = parse_generics_if_any(lexer)?;
         let name = lexer.expect_identifier()?.0;
         let post_generics = parse_generics_if_any(lexer)?;
-        let mut arguments = Vec::new();
-        if lexer.expect(Token::LParen).is_ok() {
-            if lexer.expect(Token::RParen).is_err() {
-                loop {
-                    arguments.push(parse_expression(lexer)?);
-                    match lexer.expect_n(&[Token::RParen, Token::Comma])? {
-                        Token::RParen => break,
-                        Token::Comma => {}
-                        _ => unreachable!(),
-                    }
-                }
-            }
-        }
+        let arguments = parse_call_arguments(lexer)?;
         let target = std::mem::replace(&mut expr, ASTExpression::Void);
         expr = ASTExpression::MemberCall {
             target: Box::new(target),
@@ -313,6 +325,44 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
         }
     }
     Ok(expr)
+}
+pub fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
+    if lexer.expect(Token::LBrace).is_ok() {
+        let mut arguments = HashMap::new();
+        if lexer.expect(Token::RBrace).is_err() {
+            loop {
+                let (name, position) = lexer.expect_identifier()?;
+                lexer.expect(Token::Colon)?;
+                let value = parse_expression(lexer)?;
+                if arguments.insert(name.clone(), value).is_some() {
+                    return Err(ParseError::Custom {
+                        message: format!("redefined name inside initializer {}", name),
+                        position,
+                    });
+                }
+                match lexer.expect_n(&[Token::RBrace, Token::Comma])? {
+                    Token::RBrace => break,
+                    Token::Comma => {}
+                    _ => unreachable!(),
+                }
+            }
+        }
+        return Ok(ASTCallArguments::Initializer(arguments));
+    }
+    let mut arguments = Vec::new();
+    if lexer.expect(Token::LParen).is_ok() {
+        if lexer.expect(Token::RParen).is_err() {
+            loop {
+                arguments.push(parse_expression(lexer)?);
+                match lexer.expect_n(&[Token::RParen, Token::Comma])? {
+                    Token::RParen => break,
+                    Token::Comma => {}
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+    Ok(ASTCallArguments::Function(arguments))
 }
 fn parse_type(lexer: &mut Lexer) -> ParseResult<ASTDataType> {
     let (token, position) = lexer.pop()?;
@@ -339,7 +389,7 @@ fn parse_type(lexer: &mut Lexer) -> ParseResult<ASTDataType> {
             Ok(ASTDataType::Pointer(Box::new(parse_type(lexer)?)))
         }
         Token::Identifier(id) => {
-            //todo: dots
+            let id = extend_identifier(lexer, id)?;
             let generics = parse_generics_if_any(lexer)?;
             Ok(ASTDataType::Type(id, generics))
         }
@@ -362,6 +412,24 @@ fn parse_generics_if_any(lexer: &mut Lexer) -> ParseResult<Vec<ASTDataType>> {
             break;
         }
         generics.push(parse_type(lexer)?);
+        match lexer.expect_n(&[Token::Comma, Token::RAngle])? {
+            Token::Comma => {}
+            Token::RAngle => break,
+            _ => unreachable!(),
+        }
+    }
+    Ok(generics)
+}
+fn parse_generics_names_if_any(lexer: &mut Lexer) -> ParseResult<Vec<ImmutableString>> {
+    let mut generics = Vec::new();
+    if lexer.expect(Token::LAngle).is_err() {
+        return Ok(vec![]);
+    }
+    loop {
+        if lexer.expect(Token::RAngle).is_ok() {
+            break;
+        }
+        generics.push(lexer.expect_identifier()?.0);
         match lexer.expect_n(&[Token::Comma, Token::RAngle])? {
             Token::Comma => {}
             Token::RAngle => break,
@@ -394,4 +462,14 @@ fn parse_generic_bounds_if_any(lexer: &mut Lexer) -> ParseResult<ASTGenericBound
         }
     }
     Ok(ASTGenericBounds(bounds))
+}
+fn extend_identifier(lexer: &mut Lexer, id: ImmutableString) -> ParseResult<ImmutableString> {
+    let mut full_id = id.to_string();
+    loop {
+        if lexer.expect(Token::DColon).is_err() {
+            break;
+        }
+        full_id += &format!("::{}", lexer.expect_identifier()?.0);
+    }
+    Ok(full_id.into())
 }
