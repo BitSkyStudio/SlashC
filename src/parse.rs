@@ -396,8 +396,12 @@ fn parse_block(lexer: &mut Lexer) -> ParseResult<ASTBlock> {
     let mut statements = Vec::new();
     loop {
         match lexer.peek()?.0 {
-            Token::RBrace => break,
+            Token::RBrace => {
+                lexer.pop().unwrap();
+                break;
+            }
             Token::Semi => {
+                lexer.pop().unwrap();
                 statements.push(ASTStatement {
                     left: None,
                     right: ASTExpression::Void,
@@ -460,10 +464,14 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
             }
         }
         Err(_) => {
-            if let Some(block) = lexer.try_exec(|lexer| parse_block(lexer)) {
-                ASTExpression::Block(block)
-            } else {
-                unimplemented!()
+            match lexer.peek()?.0 {
+                Token::Integer(n) => {
+                    lexer.pop().unwrap();
+                    //todo: number
+                    ASTExpression::Void
+                }
+                Token::LBrace => ASTExpression::Block(parse_block(lexer)?),
+                _ => unimplemented!("{:?}", lexer.pop()?),
             }
         }
     };
@@ -489,24 +497,25 @@ fn parse_expression(lexer: &mut Lexer) -> ParseResult<ASTExpression> {
 fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
     if lexer.expect(Token::LBrace).is_ok() {
         let mut arguments = HashMap::new();
-        if lexer.expect(Token::RBrace).is_err() {
-            loop {
-                let (name, position) = lexer.expect_identifier()?;
-                let value = match lexer.expect(Token::Colon) {
-                    Ok(_) => parse_expression(lexer)?,
-                    Err(_) => ASTExpression::Identifier(name.clone()),
-                };
-                if arguments.insert(name.clone(), value).is_some() {
-                    return Err(ParseError::Custom {
-                        message: format!("redefined name inside initializer {}", name),
-                        position,
-                    });
-                }
-                match lexer.expect_n(&[Token::RBrace, Token::Comma])? {
-                    Token::RBrace => break,
-                    Token::Comma => {}
-                    _ => unreachable!(),
-                }
+        loop {
+            if lexer.expect(Token::RBrace).is_ok() {
+                break;
+            }
+            let (name, position) = lexer.expect_identifier()?;
+            let value = match lexer.expect(Token::Colon) {
+                Ok(_) => parse_expression(lexer)?,
+                Err(_) => ASTExpression::Identifier(name.clone()),
+            };
+            if arguments.insert(name.clone(), value).is_some() {
+                return Err(ParseError::Custom {
+                    message: format!("redefined name inside initializer {}", name),
+                    position,
+                });
+            }
+            match lexer.expect_n(&[Token::RBrace, Token::Comma])? {
+                Token::RBrace => break,
+                Token::Comma => {}
+                _ => unreachable!(),
             }
         }
         return Ok(ASTCallArguments::Initializer(arguments));
