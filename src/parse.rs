@@ -8,11 +8,12 @@ use crate::lex::{
 };
 #[derive(Debug)]
 pub struct ASTModule(HashMap<MemberSignature, ASTMember>);
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ClassKind {
     Class,
     Interface,
     Struct,
+    Enum,
 }
 #[derive(Debug)]
 pub struct ASTGenericBounds(Vec<(ASTDataType, ASTDataType)>);
@@ -45,6 +46,7 @@ pub enum ASTMember {
         data_type: ASTDataType,
     },
     Function {
+        kind: FnKind,
         arguments: Vec<(ImmutableString, ASTDataType)>,
         return_type: ASTDataType,
         pre_generics: Vec<ASTDataType>,
@@ -53,7 +55,6 @@ pub enum ASTMember {
         bounds: ASTGenericBounds,
     },
     Class(ASTClass),
-    Enum(ASTEnum),
 }
 #[derive(Clone, Debug)]
 pub enum ASTDataType {
@@ -116,6 +117,12 @@ pub enum ASTCallArguments {
     Function(Vec<ASTExpression>),
     Initializer(HashMap<ImmutableString, ASTExpression>),
 }
+#[derive(Debug)]
+pub enum FnKind {
+    Simple,
+    Static,
+    Consume,
+}
 mod idt {
     use immutable_string::ImmutableString;
     lazy_static::lazy_static! {
@@ -139,13 +146,8 @@ mod idt {
         pub static ref CONSUME: ImmutableString = ImmutableString::from("consume");
     }
 }
-struct MemberClassContext {
-    class: ImmutableString,
-    generics: Vec<ImmutableString>,
-    is_enum: bool,
-}
 pub fn parse_module(lexer: &mut Lexer) -> ParseResult<ASTModule> {
-    let members = parse_members(lexer, None)?;
+    let members = parse_members(lexer, None)?.0;
     match lexer.peek() {
         Ok((token, position)) => Err(ParseError::Custom {
             message: format!("expected eof, got {:?}", token),
@@ -157,21 +159,26 @@ pub fn parse_module(lexer: &mut Lexer) -> ParseResult<ASTModule> {
 }
 fn parse_members(
     lexer: &mut Lexer,
-    class: Option<MemberClassContext>,
-) -> ParseResult<HashMap<MemberSignature, ASTMember>> {
+    parent_kind: Option<ClassKind>,
+) -> ParseResult<(HashMap<MemberSignature, ASTMember>, Vec<ASTDataType>)> {
     let mut members = HashMap::new();
+    let mut cases = Vec::new();
     loop {
         let (id, position) = match lexer.expect_identifier() {
             Ok(id) => id,
             Err(_) => break,
         };
-        if id == *idt::CLASS || id == *idt::INTERFACE || id == *idt::STRUCT {
+        if id == *idt::CLASS || id == *idt::INTERFACE || id == *idt::STRUCT || id == *idt::ENUM {
             let kind = if id == *idt::CLASS {
                 ClassKind::Class
             } else if id == *idt::INTERFACE {
                 ClassKind::Interface
-            } else {
+            } else if id == *idt::STRUCT {
                 ClassKind::Struct
+            } else if id == *idt::ENUM {
+                ClassKind::Enum
+            } else {
+                unreachable!()
             };
             let name = lexer.expect_identifier()?.0;
             let generics = parse_generics_names_if_any(lexer)?;
@@ -194,17 +201,7 @@ fn parse_members(
                 }
             }) {}
             lexer.expect(Token::LBrace)?;
-            let class_members = parse_members(
-                lexer,
-                Some(MemberClassContext {
-                    class: match &class {
-                        Some(parent_class) => format!("{}::{}", parent_class.class, name).into(),
-                        None => name.clone(),
-                    },
-                    generics: generics.clone(),
-                    is_enum: false,
-                }),
-            )?;
+            let class_members = parse_members(lexer, Some(kind))?;
             lexer.expect(Token::RBrace)?;
             members.insert(
                 MemberSignature {
@@ -213,7 +210,7 @@ fn parse_members(
                 },
                 ASTMember::Class(ASTClass {
                     kind,
-                    members: class_members,
+                    members: class_members.0,
                     impls,
                     deps,
                     generics,
@@ -237,12 +234,7 @@ fn parse_members(
                 },
             );
         } else if id == *idt::FN {
-            enum FnKind {
-                Simple,
-                Static,
-                Consume,
-            }
-            let kind = match class.is_some() {
+            let kind = match parent_kind.is_some() {
                 true => match lexer.peek() {
                     Ok((Identifier(id), _)) => {
                         if id == *idt::STATIC {
@@ -284,12 +276,42 @@ fn parse_members(
             };
             let bounds = parse_generic_bounds_if_any(lexer)?;
             let body = parse_block(lexer)?;
+            /*match kind {
+                FnKind::Static => {}
+                FnKind::Simple => {
+                    let class = class.as_ref().unwrap();
+                    parameters.insert(
+                        0,
+                        (
+                            "this".into(),
+                            ASTDataType::Pointer(
+                                match class.kind {
+                                    ClassKind::Struct | ClassKind::Enum => ASTDataType::Type(
+                                        class.class.clone(),
+                                        class
+                                            .generics
+                                            .iter()
+                                            .map(|generic| {
+                                                ASTDataType::Type(generic.clone(), vec![])
+                                            })
+                                            .collect(),
+                                    ),
+                                    _ => ASTDataType::Type("This".into(), vec![]),
+                                }
+                                .into(),
+                            ),
+                        ),
+                    );
+                }
+                FnKind::Consume => todo!(),
+            }*/
             members.insert(
                 MemberSignature {
                     name,
                     argument_count: parameters.len(),
                 },
                 ASTMember::Function {
+                    kind,
                     arguments: parameters,
                     return_type,
                     pre_generics,
@@ -298,6 +320,9 @@ fn parse_members(
                     bounds,
                 },
             );
+        } else if id == *idt::CASE && parent_kind == Some(ClassKind::Enum) {
+            let case = parse_type(lexer)?;
+            cases.push(case);
         } else {
             return Err(ParseError::ExpectedToken {
                 expect: vec![].into_boxed_slice(),
@@ -306,7 +331,7 @@ fn parse_members(
             });
         }
     }
-    Ok(members)
+    Ok((members, cases))
 }
 fn parse_assign_target(lexer: &mut Lexer) -> ParseResult<ASTAssignTarget> {
     match lexer.peek()?.0 {
@@ -501,10 +526,15 @@ fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
             if lexer.expect(Token::RBrace).is_ok() {
                 break;
             }
-            let (name, position) = lexer.expect_identifier()?;
-            let value = match lexer.expect(Token::Colon) {
-                Ok(_) => parse_expression(lexer)?,
-                Err(_) => ASTExpression::Identifier(name.clone()),
+            let (mut name, position) = lexer.expect_identifier()?;
+            let value = if name == *idt::MOVE {
+                name = lexer.expect_identifier()?.0;
+                ASTExpression::Move(name.clone())
+            } else {
+                match lexer.expect(Token::Colon) {
+                    Ok(_) => parse_expression(lexer)?,
+                    Err(_) => ASTExpression::Identifier(name.clone()),
+                }
             };
             if arguments.insert(name.clone(), value).is_some() {
                 return Err(ParseError::Custom {
@@ -512,6 +542,7 @@ fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
                     position,
                 });
             }
+
             match lexer.expect_n(&[Token::RBrace, Token::Comma])? {
                 Token::RBrace => break,
                 Token::Comma => {}
