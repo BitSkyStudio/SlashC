@@ -62,6 +62,11 @@ pub enum ASTDataType {
     UninitPointer(Box<ASTDataType>),
     DynPointer(Vec<ASTDataType>),
 }
+impl ASTDataType {
+    fn void() -> Self {
+        ASTDataType::Type("Void".into(), vec![])
+    }
+}
 #[derive(Debug)]
 pub struct ASTBlock(Vec<ASTStatement>);
 #[derive(Debug)]
@@ -130,6 +135,8 @@ mod idt {
         pub static ref LET: ImmutableString = ImmutableString::from("let");
         pub static ref IMPL: ImmutableString = ImmutableString::from("impl");
         pub static ref DEP: ImmutableString = ImmutableString::from("dep");
+        pub static ref STATIC: ImmutableString = ImmutableString::from("static");
+        pub static ref CONSUME: ImmutableString = ImmutableString::from("consume");
     }
 }
 struct MemberClassContext {
@@ -227,6 +234,68 @@ fn parse_members(
                 ASTMember::Attribute {
                     pre_generics,
                     data_type: dt,
+                },
+            );
+        } else if id == *idt::FN {
+            enum FnKind {
+                Simple,
+                Static,
+                Consume,
+            }
+            let kind = match class.is_some() {
+                true => match lexer.peek() {
+                    Ok((Identifier(id), _)) => {
+                        if id == *idt::STATIC {
+                            lexer.pop().unwrap();
+                            Some(FnKind::Static)
+                        } else if id == *idt::CONSUME {
+                            lexer.pop().unwrap();
+                            Some(FnKind::Consume)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+                .unwrap_or(FnKind::Simple),
+                false => FnKind::Static,
+            };
+            let pre_generics = parse_generics_if_any(lexer)?;
+            let (name, position) = lexer.expect_identifier()?;
+            let post_generics = parse_generics_names_if_any(lexer)?;
+            lexer.expect(Token::LParen)?;
+            let mut parameters = Vec::new();
+            if lexer.expect(Token::RParen).is_err() {
+                loop {
+                    let param_name = lexer.expect_identifier()?.0;
+                    lexer.expect(Token::Colon)?;
+                    let param_type = parse_type(lexer)?;
+                    parameters.push((param_name, param_type));
+                    match lexer.expect_n(&[Token::RParen, Token::Comma])? {
+                        Token::RParen => break,
+                        Token::Comma => {}
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            let return_type = match lexer.expect(Token::Colon) {
+                Ok(_) => parse_type(lexer)?,
+                Err(_) => ASTDataType::void(),
+            };
+            let bounds = parse_generic_bounds_if_any(lexer)?;
+            let body = parse_block(lexer)?;
+            members.insert(
+                MemberSignature {
+                    name,
+                    argument_count: parameters.len(),
+                },
+                ASTMember::Function {
+                    arguments: parameters,
+                    return_type,
+                    pre_generics,
+                    post_generics,
+                    body,
+                    bounds,
                 },
             );
         } else {
@@ -423,8 +492,10 @@ fn parse_call_arguments(lexer: &mut Lexer) -> ParseResult<ASTCallArguments> {
         if lexer.expect(Token::RBrace).is_err() {
             loop {
                 let (name, position) = lexer.expect_identifier()?;
-                lexer.expect(Token::Colon)?;
-                let value = parse_expression(lexer)?;
+                let value = match lexer.expect(Token::Colon) {
+                    Ok(_) => parse_expression(lexer)?,
+                    Err(_) => ASTExpression::Identifier(name.clone()),
+                };
                 if arguments.insert(name.clone(), value).is_some() {
                     return Err(ParseError::Custom {
                         message: format!("redefined name inside initializer {}", name),
